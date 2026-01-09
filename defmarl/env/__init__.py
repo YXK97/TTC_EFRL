@@ -1,23 +1,11 @@
 from typing import Optional
 
 from .base import MultiAgentEnv
-from .mpe_target import MPETarget
-from .mpe_spread import MPESpread
-from .mpe_line import MPELine
-from .mpe_formation import MPEFormation
-from .mpe_corridor import MPECorridor
-from .mpe_connect_spread import MPEConnectSpread
 from .mve_dist_measure_target import MVEDistMeasureTarget
 from .mve_pathtracking import MVEPathTracking
 from .mve_lanechangeANDovertake import MVELaneChangeAndOverTake
 
 ENV = {
-    'MPETarget': MPETarget,
-    'MPESpread': MPESpread,
-    'MPELine': MPELine,
-    'MPEFormation': MPEFormation,
-    'MPECorridor': MPECorridor,
-    'MPEConnectSpread': MPEConnectSpread,
     'MVEDistMTarget': MVEDistMeasureTarget,
     'MVEPathTracking': MVEPathTracking,
     'MVELaneChange': MVELaneChangeAndOverTake,
