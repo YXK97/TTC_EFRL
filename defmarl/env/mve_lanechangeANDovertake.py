@@ -241,7 +241,7 @@ class MVELaneChangeAndOverTake(MVE):
     @override
     def step(
             self, graph: MVEEnvGraphsTuple, action: Action, get_eval_info: bool = False
-    ) -> Tuple[MVEEnvGraphsTuple, Reward, Cost, Done, Info]:
+    ) -> Tuple[MVEEnvGraphsTuple, Reward, Cost, Cost, Done, Info]:
         # get information from graph
         agent_states = graph.type_states(type_idx=MVE.AGENT, n_type=self.num_agents)
         goal_states = graph.type_states(type_idx=MVE.GOAL, n_type=self.num_agents)
@@ -261,7 +261,7 @@ class MVELaneChangeAndOverTake(MVE):
 
         # calculate reward and cost
         reward = self.get_reward(graph, action)
-        cost = self.get_cost(graph)
+        cost, cost_real = self.get_cost(graph)
 
         """
         # debug
@@ -288,7 +288,7 @@ class MVELaneChangeAndOverTake(MVE):
         """
 
 
-        return self.get_graph(next_env_state), reward, cost, done, info
+        return self.get_graph(next_env_state), reward, cost, cost_real, done, info
 
     def get_reward(self, graph: MVEEnvGraphsTuple, ad_action: Action) -> Reward:
         num_agents = graph.env_states.agent.shape[0]
@@ -336,7 +336,7 @@ class MVELaneChangeAndOverTake(MVE):
 
         return reward
 
-    def get_cost(self, graph: MVEEnvGraphsTuple) -> Cost:
+    def get_cost(self, graph: MVEEnvGraphsTuple) -> Tuple[Cost, Cost]:
         """使用射线法计算的scaling factor：α为cost的评判指标，thresh-α<0安全，>=0不安全"""
         thresh = self.params["alpha_thresh"]
         num_agents = graph.env_states.agent.shape[0]
@@ -356,12 +356,15 @@ class MVELaneChangeAndOverTake(MVE):
             alpha_matrix = alpha_matrix.at[i_pairs, j_pairs].set(alpha_pairs)
             # 每个agent对应的行取最大值（即与其他agent的最小α，α越小越不安全）
             a_agent_cost = jnp.max(thresh-alpha_matrix, axis=1)
+            a_agent_cost_real = jnp.max(1-alpha_matrix, axis=1) # α*>1 表示真实安全
         """
         a_agent_cost = -jnp.ones((num_agents,), dtype=jnp.float32) # debug
+        a_agent_cost_real = -jnp.ones((num_agents,), dtype=jnp.float32) # debug
 
         # agent 和 obst 之间的scaling factor
         if num_obsts == 0:
             a_obst_cost = -jnp.ones((num_agents,), dtype=jnp.float32)
+            a_obst_cost_real = jnp.ones((num_agents,), dtype=jnp.float32)
         else:
             obstacle_states = graph.type_states(type_idx=MVE.OBST, n_type=num_obsts)
             i_pairs, j_pairs = gen_i_j_pairs(num_agents, num_obsts)
@@ -370,6 +373,7 @@ class MVELaneChangeAndOverTake(MVE):
             alpha_pairs = jax.vmap(scaling_calc, in_axes=(0, 0))(state_i_pairs, state_j_pairs)
             alpha_matrix = alpha_pairs.reshape((num_agents, num_obsts))
             a_obst_cost = jnp.max(thresh-alpha_matrix, axis=1)
+            a_obst_cost_real = jnp.max(1-alpha_matrix, axis=1) # α*>1 表示真实安全
         # a_obst_cost = -jnp.ones((num_agents,), dtype=jnp.float32) # debug
 
         # agent 和 bound 之间的scaling factor，只对y方向有约束
@@ -378,17 +382,22 @@ class MVELaneChangeAndOverTake(MVE):
         A = jnp.array([[0., 1.]])
         b = jnp.array([yl])
         a_bound_yl_cost = thresh - jax.vmap(scaling_calc_bound, in_axes=(0, None, None))(agent_states, A, b)
+        a_bound_yl_cost_real = 1 - jax.vmap(scaling_calc_bound, in_axes=(0, None, None))(agent_states, A, b) # α*>1 表示真实安全
 
         yh = state_range[3]
         A = jnp.array([[0., -1.]])
         b = jnp.array([-yh])
         a_bound_yh_cost = thresh - jax.vmap(scaling_calc_bound, in_axes=(0, None, None))(agent_states, A, b)
+        a_bound_yh_cost_real = 1 - jax.vmap(scaling_calc_bound, in_axes=(0, None, None))(agent_states, A, b) # α*>1 表示真实安全
 
         # a_bound_yl_cost = -jnp.ones((num_agents,), dtype=jnp.float32) # debug
         # a_bound_yh_cost = -jnp.ones((num_agents,), dtype=jnp.float32) # debug
 
         cost = jnp.stack([a_agent_cost, a_obst_cost, a_bound_yl_cost, a_bound_yh_cost], axis=1)
+        cost_real = jnp.stack([a_agent_cost_real, a_obst_cost_real,
+                               a_bound_yl_cost_real, a_bound_yh_cost_real], axis=1)
         assert cost.shape == (num_agents, self.n_cost)
+        assert cost_real.shape == (num_agents, self.n_cost)
 
         """
         # debug
@@ -416,7 +425,7 @@ class MVELaneChangeAndOverTake(MVE):
         cost = jnp.where(cost <= 0.0, cost, cost + eps)
         cost = jnp.clip(cost, a_min=-3.0)
 
-        return cost
+        return cost, cost_real
 
     @override
     def render_video(
@@ -768,11 +777,8 @@ class MVELaneChangeAndOverTake(MVE):
         upper_lim = jnp.array([2., 7.])[None, :].repeat(self.num_agents, axis=0)
         return lower_lim, upper_lim
 
-    def ros_run(self):
-        """在reset初始化之后才能使用，可能还需要一个ros_init函数进行ros节点的初始化？"""
-
-        # 从action节点订阅action信息
-
-        # step，包含agent、goal、obst的step，考虑添加一定的时延？
-
-        # 发布状态信息至env节点
+    @override
+    @ft.partial(jax.jit, static_argnums=(0,))
+    def unsafe_mask(self, graph: GraphsTuple) -> Array:
+        _, cost_real = self.get_cost(graph)
+        return jnp.any(cost_real >= 0.0, axis=-1)

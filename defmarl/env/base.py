@@ -13,18 +13,9 @@ class StepResult(NamedTuple):
     graph: GraphsTuple
     reward: Reward
     cost: Cost
+    cost_real: Cost
     done: Done
     info: Info
-
-
-class RolloutResult(NamedTuple):
-    Tp1_graph: GraphsTuple
-    T_action: Action
-    T_reward: Reward
-    T_cost: Cost
-    T_done: Done
-    T_info: Info
-    T_rnn_state: Array
 
 
 class MultiAgentEnv(ABC):

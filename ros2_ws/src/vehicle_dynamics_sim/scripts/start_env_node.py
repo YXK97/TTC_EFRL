@@ -135,11 +135,12 @@ class EnvNode(Node):
         # 获取控制量
         ad_action = self.get_control_cmd()  # [acc, delta]
         # 执行动力学step
-        next_graph, reward, a_cost, done, info = self.env.step(self.current_graph, ad_action)
+        next_graph, reward, a_cost, a_cost_real, done, info = self.env.step(self.current_graph, ad_action)
         cost = a_cost.max
+        cost_real = a_cost_real.max
 
         # 发布当前时刻环境状态量、控制量、评估量并更新
-        self.publish_state(self.current_graph, reward, cost)
+        self.publish_state(self.current_graph, reward, cost, cost_real)
 
         # 同步现实时间：补足时延
         step_elapsed = time.time() - step_start
@@ -189,7 +190,7 @@ class EnvNode(Node):
             self.get_logger().warn(f'Failed to get control cmd: {e}, use default [0,0]')
             return default_action
 
-    def publish_state(self, graph: MVEEnvGraphsTuple, reward: float, cost: float):
+    def publish_state(self, graph: MVEEnvGraphsTuple, reward: float, cost: float, cost_real: float):
         """发布自车+障碍车状态到/ros_env"""
         aS_agent_states = graph.type_states(type_idx=MVE.AGENT, n_type=self.env.num_agents)
         aS_goal_states = graph.type_states(type_idx=MVE.GOAL, n_type=self.env.num_agents)
@@ -219,6 +220,7 @@ class EnvNode(Node):
 
         msg.reward = reward
         msg.cost = cost
+        msg.cost_real = cost_real
 
         self.state_pub.publish(msg)
 

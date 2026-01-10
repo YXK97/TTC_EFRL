@@ -11,6 +11,7 @@ class Rollout(NamedTuple):
     rnn_states: Array
     rewards: Reward
     costs: Cost
+    costs_real: Cost
     dones: Done
     log_pis: Array
     next_graph: GraphsTuple

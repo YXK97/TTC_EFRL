@@ -1,13 +1,9 @@
 from typing import Optional
 
 from .base import MultiAgentEnv
-from .mve_dist_measure_target import MVEDistMeasureTarget
-from .mve_pathtracking import MVEPathTracking
 from .mve_lanechangeANDovertake import MVELaneChangeAndOverTake
 
 ENV = {
-    'MVEDistMTarget': MVEDistMeasureTarget,
-    'MVEPathTracking': MVEPathTracking,
     'MVELaneChange': MVELaneChangeAndOverTake,
 }
 
