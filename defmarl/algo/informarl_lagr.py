@@ -133,10 +133,10 @@ class InforMARLLagr(InforMARL):
 
     @property
     def config(self) -> dict:
-        return super().config | {
-            "lagr_init": self.lagr_init,
-            "lr_lagr": self.lr_lagr
-        }
+        old_config = super().config
+        old_config.update({"lagr_init": self.lagr_init, "lr_lagr": self.lr_lagr})
+
+        return old_config
 
 
     @property
@@ -168,9 +168,9 @@ class InforMARLLagr(InforMARL):
         self.policy_train_state = policy_train_state_single
         self.lagr = lagr
 
-        update_info_single = update_info_single | {'hyper/lr_actor': self.lr_actor,
-                                                   'hyper/lr_critic': self.lr_critic,
-                                                   'hyper/coef_ent': self.coef_ent}
+        update_info_single.update({'hyper/lr_actor': self.lr_actor,
+                                   'hyper/lr_critic': self.lr_critic,
+                                   'hyper/coef_ent': self.coef_ent})
         self.iter_index += 1
 
         return update_info_single
@@ -284,8 +284,9 @@ class InforMARLLagr(InforMARL):
             )
             policy, lagr_lambda, policy_info = self.update_policy_lagr(
                 policy, lagr_lambda, rollout_batch, bT_gaes[idx], bTah_cost_gaes[idx], bTah_Vc[idx], rnn_chunk_ids)
+            value_info.update(policy_info)
 
-            return (critic, cost_critic, policy, lagr_lambda), value_info | policy_info
+            return (critic, cost_critic, policy, lagr_lambda), value_info
 
         (critic_train_state, cost_critic_train_state, policy_train_state, lagr), update_info = jax.lax.scan(
             update_fn, (critic_train_state, cost_critic_train_state, policy_train_state, lagr), batch_idx)
@@ -310,7 +311,7 @@ class InforMARLLagr(InforMARL):
         cost_rnn_state_inits = jnp.zeros_like(cost_rnn_states[:, rnn_chunk_ids[:, 0]])
         bcT_targets = bT_targets[:, rnn_chunk_ids]
         bcTah_cost_targets = bTah_cost_targets[:, rnn_chunk_ids]
-        graph_chunks = jax.tree.map(lambda x: x[:, rnn_chunk_ids], rollout.graph)
+        graph_chunks = jtu.tree_map(lambda x: x[:, rnn_chunk_ids], rollout.graph)
 
         def get_loss(critic_params, cost_critic_params):
             bcT_value, _, _ = jax.vmap(jax.vmap(
@@ -340,11 +341,12 @@ class InforMARLLagr(InforMARL):
         grad_cost, grad_cost_norm = compute_norm_and_clip(grad_cost, self.max_grad_norm)
         critic_train_state = critic_train_state.apply_gradients(grads=grad_value)
         cost_critic_train_state = cost_critic_train_state.apply_gradients(grads=grad_cost)
+        value_info.update({'critic/has_nan': grad_value_has_nan,
+                           'critic/grad_Vh_has_nan': grad_cost_has_nan,
+                           'critic/grad_norm': grad_value_norm,
+                           'critic/grad_Vh_norm': grad_cost_norm})
 
-        return critic_train_state, cost_critic_train_state, (value_info | {'critic/has_nan': grad_value_has_nan,
-                                                                           'critic/grad_Vh_has_nan': grad_cost_has_nan,
-                                                                           'critic/grad_norm': grad_value_norm,
-                                                                           'critic/grad_Vh_norm': grad_cost_norm})
+        return critic_train_state, cost_critic_train_state, value_info
 
     def update_policy_lagr(
             self,
@@ -356,7 +358,7 @@ class InforMARLLagr(InforMARL):
             bTah_Vc: Array,
             rnn_chunk_ids: Array
     ) -> Tuple[TrainState, Array, dict]:
-        bcT_rollout = jax.tree.map(lambda x: x[:, rnn_chunk_ids], rollout)
+        bcT_rollout = jtu.tree_map(lambda x: x[:, rnn_chunk_ids], rollout)
         rnn_state_inits = jnp.zeros_like(rollout.rnn_states[:, rnn_chunk_ids[:, 0]])
         bcT_gaes = bT_gaes[:, rnn_chunk_ids]
         bcTa_gaes = jnp.repeat(bcT_gaes[:, :, :, None], self.n_agents, axis=-1)
@@ -364,13 +366,13 @@ class InforMARLLagr(InforMARL):
         bcTa_gaes = bcTa_gaes - (bcTah_cost_gaes * lagr[None, None, None, :]).mean(axis=-1)
         bcTah_Vc = bTah_Vc[:, rnn_chunk_ids]
 
-        graph_chunks = jax.tree.map(lambda x: x[:, rnn_chunk_ids], rollout.graph)
-        action_chunks = jax.tree.map(lambda x: x[:, rnn_chunk_ids], rollout.actions)
+        graph_chunks = jtu.tree_map(lambda x: x[:, rnn_chunk_ids], rollout.graph)
+        action_chunks = jtu.tree_map(lambda x: x[:, rnn_chunk_ids], rollout.actions)
 
         action_key = jr.fold_in(self.key, policy_train_state.step)
         action_keys = jr.split(action_key, rollout.actions.shape[0] * rollout.actions.shape[1]).reshape(
             rollout.actions.shape[:2] + (2,))
-        action_keys = jax.tree.map(lambda x: x[:, rnn_chunk_ids], action_keys)
+        action_keys = jtu.tree_map(lambda x: x[:, rnn_chunk_ids], action_keys)
 
         def get_loss(params):
             bcTa_log_pis, bcTa_entropy, _, _ = jax.vmap(jax.vmap(
@@ -401,10 +403,11 @@ class InforMARLLagr(InforMARL):
         delta_lagr = -(bcTah_Vc * (1 - self.gamma) +
                        bcTa_weight[:, :, :, :, None] * bcTah_cost_gaes).mean(axis=(0, 1, 2))
         lagr = nn.relu(lagr - delta_lagr * self.lr_lagr)
+        policy_info.update({'policy/has_nan': grad_has_nan,
+                            'policy/grad_norm': grad_norm,
+                            'policy/mean_lagr': lagr.mean()})
 
-        return policy_train_state, lagr, policy_info | {'policy/has_nan': grad_has_nan,
-                                                        'policy/grad_norm': grad_norm,
-                                                        'policy/mean_lagr': lagr.mean()}
+        return policy_train_state, lagr, policy_info
 
 
     def save(self, save_dir: str, iter: int, params_to_save: dict = None):

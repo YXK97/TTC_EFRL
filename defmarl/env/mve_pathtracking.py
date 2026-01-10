@@ -5,7 +5,7 @@ import jax.numpy as jnp
 import functools as ft
 import numpy as np
 
-from typing import Optional, Tuple
+from typing import Optional, Tuple, List
 from typing_extensions import override
 from matplotlib import pyplot as plt
 from matplotlib.animation import FuncAnimation
@@ -513,10 +513,10 @@ class MVEPathTracking(MVE):
             Vh_text = ax.text(0.99, 0.99, "Vh: []", va="top", ha="right", **text_font_opts)
 
         # init function for animation
-        def init_fn() -> list[plt.Artist]:
+        def init_fn() -> List[plt.Artist]:
             return [col_obsts, col_agents, col_edges, *agent_labels, cost_text, *safe_text, kk_text]
 
-        def update(kk: int) -> list[plt.Artist]:
+        def update(kk: int) -> List[plt.Artist]:
             graph = tree_index(T_graph, kk)
             n_pos_t = graph.states[:-1, :2] # 最后一个node是padding，不要
             n_theta_t = graph.states[:-1, 2]
@@ -590,7 +590,7 @@ class MVEPathTracking(MVE):
         ani = FuncAnimation(fig, update, frames=anim_T, init_func=init_fn, interval=mspf, blit=True)
         save_anim(ani, video_path)
 
-    def edge_blocks(self, state: MVEEnvState) -> list[EdgeBlock]:
+    def edge_blocks(self, state: MVEEnvState) -> List[EdgeBlock]:
         num_agents = state.agent.shape[0]
         num_goals = state.goal.shape[0]
         assert num_agents == num_goals

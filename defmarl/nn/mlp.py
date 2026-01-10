@@ -1,5 +1,6 @@
 import flax.linen as nn
 
+from typing import Optional
 from .utils import default_nn_init, scaled_init, AnyFloat, HidSizes, ActFn, signal_last_enumerate
 
 
@@ -8,8 +9,8 @@ class MLP(nn.Module):
     act: ActFn = nn.relu
     act_final: bool = True
     use_layernorm: bool = True
-    scale_final: float | None = None
-    dropout_rate: float | None = None
+    scale_final: Optional[float] = None
+    dropout_rate: Optional[float] = None
 
     @nn.compact
     def __call__(self, x: AnyFloat, apply_dropout: bool = False) -> AnyFloat:

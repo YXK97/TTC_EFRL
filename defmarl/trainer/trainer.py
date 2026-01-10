@@ -189,14 +189,14 @@ class Trainer:
                     # full test with optimal z
                     reward_min, reward_max, reward_mean, reward_final, cost_max, cost_mean, unsafe_frac, opt_z0 = \
                         opt_rollout_and_eval(current_params, G_eval_opt_keys)
-                    eval_info = eval_info | {
+                    eval_info.update({
                         "eval/reward": float(reward_mean[0]),
                         "eval/reward_final": float(reward_final[0]),
                         "eval/cost_max": float(cost_max[0]),
                         "eval/cost_mean": float(cost_mean[0]),
                         "eval/unsafe_frac": float(unsafe_frac[0]),
                         "eval/opt_z0": float(opt_z0[0]),
-                    }
+                    })
                     time_since_start = time() - start_time
                     eval_verbose = (f'iter: {iter:3}, time: {time_since_start:5.0f}s, reward: {float(reward_mean[0]):9.4f}, '
                                     f'min/max reward: {float(reward_min[0]):7.2f}/{float(reward_max[0]):7.2f}, '
@@ -210,7 +210,7 @@ class Trainer:
                     zmax_rollout_and_eval(current_params, G_eval_zmax_keys)
                 reward_mean_zmin, reward_final_zmin, cost_zmin_max, cost_zmin_mean, unsafe_frac_zmin = \
                     zmin_rollout_and_eval(current_params, G_eval_zmin_keys)
-                eval_info = eval_info | {
+                eval_info.update({
                     "eval/reward_zmax": float(reward_mean_zmax[0]),
                     "eval/reward_zmin": float(reward_mean_zmin[0]),
                     "eval/reward_final_zmax": float(reward_final_zmax[0]),
@@ -221,7 +221,7 @@ class Trainer:
                     "eval/cost_zmin_mean": float(cost_zmin_mean[0]),
                     "eval/unsafe_frac_zmax": float(unsafe_frac_zmax[0]),
                     "eval/unsafe_frac_zmin": float(unsafe_frac_zmin[0]),
-                }
+                })
                 wandb.log(eval_info, step=self.update_iters)
 
             # save the model

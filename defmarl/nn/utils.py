@@ -2,7 +2,7 @@ import optax
 import flax.linen as nn
 import jax.numpy as jnp
 
-from typing import Any, Callable, Literal, Sequence, Iterable, Generator, TypeVar
+from typing import Any, Callable, Literal, Sequence, Iterable, Generator, TypeVar, Union, Tuple, Dict
 from jaxtyping import Array, Float
 from flax import traverse_util
 
@@ -10,7 +10,7 @@ from flax import traverse_util
 ActFn = Callable[[Array], Array]
 PRGNKey = Float[Array, '2']
 AnyFloat = Float[Array, '*']
-Shape = tuple[int, ...]
+Shape = Tuple[int, ...]
 InitFn = Callable[[PRGNKey, Shape, Any], Any]
 HidSizes = Sequence[int]
 
@@ -32,13 +32,13 @@ ActLiteral = Literal["relu", "tanh", "elu", "swish", "silu", "gelu", "softplus"]
 
 
 def get_act_from_str(act_str: ActLiteral) -> ActFn:
-    act_dict: dict[Literal, ActFn] = dict(
+    act_dict: Dict[Literal, ActFn] = dict(
         relu=nn.relu, tanh=nn.tanh, elu=nn.elu, swish=nn.swish, silu=nn.silu, gelu=nn.gelu, softplus=nn.softplus
     )
     return act_dict[act_str]
 
 
-def signal_last_enumerate(it: Iterable[_Elem]) -> Generator[tuple[bool, int, _Elem], None, None]:
+def signal_last_enumerate(it: Iterable[_Elem]) -> Generator[Tuple[bool, int, _Elem], None, None]:
     iterable = iter(it)
     count = 0
     ret_var = next(iterable)
@@ -54,8 +54,8 @@ def safe_get(arr, idx, fill_value=jnp.nan):
 
 
 def wd_mask(params):
-    Path = tuple[str, ...]
-    flat_params: dict[Path, jnp.ndarray] = traverse_util.flatten_dict(params)
+    Path = Tuple[str, ...]
+    flat_params: Dict[Path, jnp.ndarray] = traverse_util.flatten_dict(params)
     # Apply weight decay to all parameters except biases and LayerNorm scale and bias.
     flat_mask = {path: (path[-1] != "bias" and path[-2:] != ("LayerNorm", "scale")) for path in flat_params}
     return traverse_util.unflatten_dict(flat_mask)
@@ -68,6 +68,6 @@ def optim(learning_rate: float, wd: float, eps: float):
 
 
 def get_default_tx(
-    lr: optax.Schedule | float, wd: optax.Schedule | float = 1e-4, eps: float = 1e-5
+    lr: Union[optax.Schedule, float], wd: Union[optax.Schedule, float] = 1e-4, eps: float = 1e-5
 ) -> optax.GradientTransformation:
     return optax.inject_hyperparams(optim)(learning_rate=lr, wd=wd, eps=eps)

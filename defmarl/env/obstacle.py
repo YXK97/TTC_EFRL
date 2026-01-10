@@ -2,7 +2,7 @@ import jax
 import jax.numpy as jnp
 
 from typing import NamedTuple, Protocol
-from jax.scipy.spatial.transform import Rotation
+from scipy.spatial.transform import Rotation
 from ..utils.typing import Pos2d, Pos3d, Pos
 from ..utils.typing import Array, ObsType, ObsWidth, ObsHeight, ObsTheta, Radius, ObsLength, ObsQuaternion, BoolScalar
 

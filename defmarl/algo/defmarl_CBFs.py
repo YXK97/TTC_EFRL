@@ -480,9 +480,9 @@ class DefMARL_CBFs(Algorithm):
         if self.use_prev_init:
             self.memory = rollout_single
 
-        update_info_single = update_info_single | {'hyper/lr_actor': self.lr_actor,
-                                                   'hyper/lr_critic': self.lr_critic,
-                                                   'hyper/coef_ent': self.coef_ent}
+        update_info_single.update({'hyper/lr_actor': self.lr_actor,
+                                   'hyper/lr_critic': self.lr_critic,
+                                   'hyper/coef_ent': self.coef_ent})
         self.iter_index += 1
 
         return update_info_single
@@ -593,7 +593,8 @@ class DefMARL_CBFs(Algorithm):
                 rnn_states_Vl[idx], rnn_states_Vh[idx], rnn_chunk_ids
             )
             policy, policy_info = self.update_policy(policy, rollout_batch, bTa_A[idx], rnn_chunk_ids)
-            return (critic, Vh, policy), (value_info | policy_info)
+            value_info.update(policy_info)
+            return (critic, Vh, policy), value_info
 
         (critic_train_state, Vh_train_state, policy_train_state), info = lax.scan(
             update_fn, (critic_train_state, Vh_train_state, policy_train_state), batch_idx
@@ -630,14 +631,14 @@ class DefMARL_CBFs(Algorithm):
     ):
 
         # divide the rollout into chunks (n_env, n_chunks, T, ...)
-        bcT_rollout = jax.tree.map(lambda x: x[:, rnn_chunk_ids], rollout)
+        bcT_rollout = jtu.tree_map(lambda x: x[:, rnn_chunk_ids], rollout)
         rnn_state_inits = jnp.zeros_like(rollout.rnn_states[:, rnn_chunk_ids[:, 0]])
         bcTa_A = bTa_A[:, rnn_chunk_ids]
 
         action_key = jr.fold_in(self.key, policy_train_state.step)
         action_keys = jr.split(action_key, rollout.actions.shape[0] * rollout.actions.shape[1]).reshape(
             rollout.actions.shape[:2] + (2,))
-        action_keys = jax.tree.map(lambda x: x[:, rnn_chunk_ids], action_keys)
+        action_keys = jtu.tree_map(lambda x: x[:, rnn_chunk_ids], action_keys)
 
         def get_loss(params):
             bcTa_log_pis, bcTa_entropy, _, _ = jax.vmap(jax.vmap(
@@ -664,8 +665,9 @@ class DefMARL_CBFs(Algorithm):
         grad_has_nan = (jax.lax.psum(has_any_nan_or_inf(grad).astype(jnp.float32), axis_name='n_gpu') > 0).astype(jnp.float32)
         grad, grad_norm = compute_norm_and_clip(grad, self.max_grad_norm)
         policy_train_state = policy_train_state.apply_gradients(grads=grad)
+        policy_info.update({'policy/has_nan': grad_has_nan, 'policy/grad_norm': grad_norm})
 
-        return policy_train_state, (policy_info | {'policy/has_nan': grad_has_nan, 'policy/grad_norm': grad_norm})
+        return policy_train_state, policy_info
 
     def update_value(
             self,
@@ -678,7 +680,7 @@ class DefMARL_CBFs(Algorithm):
             rnn_states_Vh: Array,
             rnn_chunk_ids: Array
     ) -> Tuple[TrainState, TrainState, dict]:
-        bcT_rollout = jax.tree.map(lambda x: x[:, rnn_chunk_ids], rollout)  # (n_env, n_chunk, T, ...)
+        bcT_rollout = jtu.tree_map(lambda x: x[:, rnn_chunk_ids], rollout)  # (n_env, n_chunk, T, ...)
         Vl_rnn_state_inits = jnp.zeros_like(rnn_states_Vl[:, rnn_chunk_ids[:, 0]])  # (n_env, n_chunk, ...)
         Vh_rnn_state_inits = jnp.zeros_like(rnn_states_Vh[:, rnn_chunk_ids[:, 0]])
         bcT_Ql = bT_Ql[:, rnn_chunk_ids]
@@ -712,10 +714,12 @@ class DefMARL_CBFs(Algorithm):
         critic_train_state = critic_train_state.apply_gradients(grads=grad_Vl)
         Vh_train_state = Vh_train_state.apply_gradients(grads=grad_Vh)
 
-        return critic_train_state, Vh_train_state, (value_info | {'critic/has_nan': grad_Vl_has_nan,
-                                                                  'critic/grad_Vh_has_nan': grad_Vh_has_nan,
-                                                                  'critic/grad_norm': grad_Vl_norm,
-                                                                  'critic/grad_Vh_norm': grad_Vh_norm})
+        value_info = {} or value_info
+        value_info.update({'critic/has_nan': grad_Vl_has_nan,
+                           'critic/grad_Vh_has_nan': grad_Vh_has_nan,
+                           'critic/grad_norm': grad_Vl_norm,
+                           'critic/grad_Vh_norm': grad_Vh_norm})
+        return critic_train_state, Vh_train_state, value_info
 
     def save(self, save_dir: str, iter: int, params_to_save: dict = None):
         model_dir = os.path.join(save_dir, str(iter))

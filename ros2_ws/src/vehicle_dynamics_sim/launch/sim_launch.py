@@ -74,6 +74,8 @@ def generate_launch_description():
             on_start=[action_node]
         )
     )
+
+    """
     stop_action_after_env = RegisterEventHandler(
         event_handler=OnProcessExit(
             target_action=env_node,
@@ -86,6 +88,7 @@ def generate_launch_description():
             ]
         )
     )
+    """
 
     return LaunchDescription([
         # 声明命令行参数
@@ -103,5 +106,5 @@ def generate_launch_description():
         # 节点与联动逻辑
         env_node,
         start_action_after_env,
-        stop_action_after_env
+        #stop_action_after_env
     ])

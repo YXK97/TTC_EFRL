@@ -340,9 +340,9 @@ class InforMARL(Algorithm):
         self.critic_train_state = critic_train_state_single
         self.policy_train_state = policy_train_state_single
 
-        update_info_single = update_info_single | {'hyper/lr_actor': self.lr_actor,
-                                                   'hyper/lr_critic': self.lr_critic,
-                                                   'hyper/coef_ent': self.coef_ent}
+        update_info_single.update({'hyper/lr_actor': self.lr_actor,
+                                   'hyper/lr_critic': self.lr_critic,
+                                   'hyper/coef_ent': self.coef_ent})
         self.iter_index += 1
 
         return update_info_single
@@ -417,7 +417,8 @@ class InforMARL(Algorithm):
             critic, critic_info = self.update_critic(
                 critic, rollout_batch, targets[idx], value_rnn_states[idx], rnn_chunk_ids)
             policy, policy_info = self.update_policy(policy, rollout_batch, gaes[idx], rnn_chunk_ids)
-            return (critic, policy), (critic_info | policy_info)
+            critic_info.update(policy_info)
+            return (critic, policy), critic_info
 
         (critic_train_state, policy_train_state), info = lax.scan(
             update_fn, (critic_train_state, policy_train_state), batch_idx
@@ -436,7 +437,7 @@ class InforMARL(Algorithm):
             rnn_states: Array,
             rnn_chunk_ids: Array
     ) -> Tuple[TrainState, dict]:
-        graph_chunks = jax.tree.map(lambda x: x[:, rnn_chunk_ids], rollout.graph)
+        graph_chunks = jtu.tree_map(lambda x: x[:, rnn_chunk_ids], rollout.graph)
         rnn_state_inits = jnp.zeros_like(rnn_states[:, rnn_chunk_ids[:, 0]])  # use zeros rnn_state as init
 
         def get_value_loss(params):
@@ -484,14 +485,14 @@ class InforMARL(Algorithm):
         gaes = jnp.repeat(gaes, self.n_agents, axis=-1)
 
         # divide the rollout into chunks (n_env, n_chunks, T, ...)
-        graph_chunks = jax.tree.map(lambda x: x[:, rnn_chunk_ids], rollout.graph)
-        action_chunks = jax.tree.map(lambda x: x[:, rnn_chunk_ids], rollout.actions)
+        graph_chunks = jtu.tree_map(lambda x: x[:, rnn_chunk_ids], rollout.graph)
+        action_chunks = jtu.tree_map(lambda x: x[:, rnn_chunk_ids], rollout.actions)
         rnn_state_inits = jnp.zeros_like(rollout.rnn_states[:, rnn_chunk_ids[:, 0]])  # use zeros rnn_state as init
 
         action_key = jr.fold_in(self.key, policy_train_state.step)
         action_keys = jr.split(action_key, rollout.actions.shape[0] * rollout.actions.shape[1]).reshape(
             rollout.actions.shape[:2] + (2,))
-        action_keys = jax.tree.map(lambda x: x[:, rnn_chunk_ids], action_keys)
+        action_keys = jtu.tree_map(lambda x: x[:, rnn_chunk_ids], action_keys)
 
         def get_policy_loss(params):
             log_pis, policy_entropy, rnn_states, final_rnn_states = jax.vmap(jax.vmap(
@@ -522,12 +523,12 @@ class InforMARL(Algorithm):
         policy_train_state = policy_train_state.apply_gradients(grads=grad)
 
         # get info
-        info = {
+        info.update({
                    'policy/loss': loss,
                    'policy/grad_norm': grad_norm,
                    'policy/has_nan': policy_has_nan,
                    'policy/log_pi_min': rollout.log_pis.min()
-               } | info
+                    })
 
         return policy_train_state, info
 

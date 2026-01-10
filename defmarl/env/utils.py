@@ -4,7 +4,7 @@ import functools as ft
 import jax
 import jax.random as jr
 
-from typing import Tuple
+from typing import Tuple, Union, Optional
 from jax.lax import while_loop
 
 from ..utils.typing import Array, Radius, BoolScalar, Pos, PRNGKey, AgentState, PathRefs
@@ -48,7 +48,7 @@ def inside_obstacles(points: Pos, obstacles: Obstacle = None, r: Radius = 0.) ->
 
 def get_node_goal_rng(
         key: PRNGKey,
-        side_length: float | Array,
+        side_length: Union[float, Array],
         dim: int,
         n: int,
         min_dist: float,
@@ -154,7 +154,7 @@ def process_lane_centers(y_state_range: Array, lane_width: float) -> Array:
     c_ycs = yh - lane_width*(i-1/2)
     return c_ycs
 
-def process_lane_marks(y_state_range: Array, lane_width: float) -> Tuple[Array, Array|None]:
+def process_lane_marks(y_state_range: Array, lane_width: float) -> Tuple[Array, Optional[Array]]:
     """根据输入的y坐标范围和车道宽度，解析所有车道边界的位置并整合进两个数组之中，第一个输出为道路边界，第二个输出为车道线（虚线）"""
     yh = y_state_range[1]
     yl = y_state_range[0]

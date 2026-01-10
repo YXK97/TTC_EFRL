@@ -257,33 +257,8 @@ class ActionNode(Node):
 
 
 def main():
-    parser = argparse.ArgumentParser()
-    # required arguments
-    parser.add_argument("--path", type=str, required=True)
-    # optional arguments
-    parser.add_argument("--epi", type=int, default=5)
-    parser.add_argument("--no-video", action="store_true", default=False)
-    parser.add_argument("--from-iter", type=int, default=None)
-    parser.add_argument("-n", "--num-agents", type=int, default=None)
-    parser.add_argument("--obs", type=int, default=None)
-    parser.add_argument("--env", type=str, default=None)
-    parser.add_argument("--full-observation", action="store_true", default=False)
-    parser.add_argument("--cpu", action="store_true", default=False)
-    parser.add_argument("--max-step", type=int, default=None)
-    parser.add_argument("--stochastic", action="store_true", default=False)
-    parser.add_argument("--log", action="store_true", default=False)
-    parser.add_argument("--seed", type=int, default=1234)
-    parser.add_argument("--debug", action="store_true", default=False)
-    parser.add_argument("--dpi", type=int, default=100)
-    parser.add_argument("-z", type=str, default=None)
-    parser.add_argument("--area-size", type=parse_jax_array, default=None,
-                        help='输入jax数组，一维用逗号分隔（如10,20），二维用分号+逗号（如10,20;30,40）')
-    parser.add_argument("--offset", type=int, default=0)
-    parser.add_argument("--visible-devices", type=str, default=None)
-    args = parser.parse_args()
-
     rclpy.init()
-    action_node = ActionNode(args)
+    action_node = ActionNode()
     rclpy.spin(action_node)
     action_node.destroy_node()
     rclpy.shutdown()

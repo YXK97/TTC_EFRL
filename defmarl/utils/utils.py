@@ -6,7 +6,8 @@ import matplotlib.collections as mcollections
 import numpy as np
 
 from datetime import timedelta
-from typing import Any, Callable, Iterable, ParamSpec, Sequence, TypeVar, Tuple, List, NamedTuple
+from typing import Any, Callable, Iterable, Sequence, TypeVar, List, NamedTuple, Union, Optional, Tuple
+from typing_extensions import ParamSpec
 from jax import numpy as jnp, tree_util as jtu
 from jax._src.lib import xla_client as xc
 from matplotlib.animation import FuncAnimation
@@ -30,12 +31,13 @@ _T = TypeVar("_T")
 _U = TypeVar("_U")
 
 
-def jax_vmap(fn: _Fn, in_axes: int | Sequence[Any] = 0, out_axes: Any = 0) -> _Fn:
+def jax_vmap(fn: _Fn, in_axes: Union[int, Sequence[Any]] = 0, out_axes: Any = 0) -> _Fn:
     return jax.vmap(fn, in_axes, out_axes)
 
 
 def concat_at_front(
-        arr1: jnp.ndarray | np.ndarray, arr2: jnp.ndarray | np.ndarray, axis: int) -> jnp.ndarray | np.ndarray:
+        arr1: Union[jnp.ndarray, np.ndarray], arr2: Union[jnp.ndarray, np.ndarray], axis: int
+) -> Union[jnp.ndarray, np.ndarray]:
     """
     :param arr1: (nx, )
     :param arr2: (T, nx)
@@ -60,10 +62,10 @@ def tree_concat_at_front(tree1: _PyTree, tree2: _PyTree, axis: int) -> _PyTree:
     return jtu.tree_map(tree_concat_at_front_inner, tree1, tree2)
 
 
-def tree_index(tree: _PyTree, idx: int | Array) -> _PyTree:
+def tree_index(tree: _PyTree, idx: Union[int, Array]) -> _PyTree:
     return jtu.tree_map(lambda x: x[idx], tree)
 
-def tree_2nd_index(tree: _PyTree, idx: int | Array) -> _PyTree:
+def tree_2nd_index(tree: _PyTree, idx: Union[int, Array]) -> _PyTree:
     return jtu.tree_map(lambda x: x[:, idx], tree)
 
 
@@ -82,14 +84,20 @@ def mask2index(mask: jnp.ndarray, n_true: int) -> jnp.ndarray:
 
 def jax_jit_np(
         fn: _Fn,
-        static_argnums: int | Sequence[int] | None = None,
-        static_argnames: str | Iterable[str] | None = None,
-        donate_argnums: int | Sequence[int] = (),
+        static_argnums: Union[int, Sequence[int], None] = None,
+        static_argnames: Union[str, Iterable[str], None] = None,
+        donate_argnums: Union[int, Sequence[int]] = (),
         device: xc.Device = None,
         *args,
         **kwargs,
 ) -> _Fn:
-    jit_fn = jax.jit(fn, static_argnums, static_argnames, donate_argnums, device, *args, **kwargs)
+    jit_fn = jax.jit(
+        fn,
+        static_argnums=static_argnums,  # 关键字参数传递
+        static_argnames=static_argnames,  # 关键字参数传递
+        donate_argnums=donate_argnums,  # 关键字参数传递
+        device=device  # 关键字参数传递
+    )
 
     def wrapper(*args, **kwargs) -> _R:
         return jax2np(jit_fn(*args, **kwargs))
@@ -176,7 +184,7 @@ def tree_stack(trees: list):
     return jtu.tree_map(tree_stack_inner, *trees)
 
 
-def as_shape(shape: int | Shape) -> Shape:
+def as_shape(shape: Union[int, Shape]) -> Shape:
     if isinstance(shape, int):
         shape = (shape,)
     if not isinstance(shape, tuple):
@@ -184,11 +192,11 @@ def as_shape(shape: int | Shape) -> Shape:
     return shape
 
 
-def get_or(maybe: _T | None, value: _U) -> _T | _U:
+def get_or(maybe: Optional[_T], value: _U) -> Union[_T, _U]:
     return value if maybe is None else maybe
 
 
-def assert_shape(arr: _Arr, shape: int | Shape, label: str | None = None) -> _Arr:
+def assert_shape(arr: _Arr, shape: Union[int, Shape], label: Optional[str] = None) -> _Arr:
     shape = as_shape(shape)
     label = get_or(label, "array")
     if arr.shape != shape:
@@ -196,7 +204,7 @@ def assert_shape(arr: _Arr, shape: int | Shape, label: str | None = None) -> _Ar
     return arr
 
 
-def tree_where(cond: BoolScalar | bool, true_val: _PyTree, false_val: _PyTree) -> _PyTree:
+def tree_where(cond: Union[BoolScalar, bool], true_val: _PyTree, false_val: _PyTree) -> _PyTree:
     return jtu.tree_map(lambda x, y: jnp.where(cond, x, y), true_val, false_val)
 
 

@@ -2,12 +2,11 @@ import pathlib
 import jax.numpy as jnp
 
 from abc import ABC, abstractmethod, abstractproperty
-from typing import NamedTuple, Optional, Tuple
+from typing import NamedTuple, Optional, Tuple, Union
 
 from ..trainer.data import Rollout
 from ..utils.graph import GraphsTuple
 from ..utils.typing import Action, Array, Cost, Done, Info, Reward, State
-from jax.debug import print as jprint
 
 
 class StepResult(NamedTuple):
@@ -35,7 +34,7 @@ class MultiAgentEnv(ABC):
     def __init__(
             self,
             num_agents: int,
-            area_size: float | Array,
+            area_size: Union[float, Array],
             max_step: int = 128,
             max_travel: Optional[float] = None,
             dt: float = 0.03,
@@ -65,7 +64,7 @@ class MultiAgentEnv(ABC):
         return self._max_travel
 
     @property
-    def area_size(self) -> float | Array:
+    def area_size(self) -> Union[float, Array]:
         return self._area_size
 
     @property

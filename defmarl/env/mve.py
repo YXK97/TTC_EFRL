@@ -5,7 +5,7 @@ import jax.random as jr
 import numpy as np
 import functools as ft
 
-from typing import NamedTuple, Tuple, Optional
+from typing import NamedTuple, Tuple, Optional, List
 from abc import ABC, abstractmethod, abstractproperty
 
 from matplotlib import pyplot as plt
@@ -399,10 +399,10 @@ class MVE(MultiAgentEnv, ABC): # # Multi Vehicles Environment
             Vh_text = ax.text(0.99, 0.99, "Vh: []", va="top", ha="right", **text_font_opts)
 
         # init function for animation
-        def init_fn() -> list[plt.Artist]:
+        def init_fn() -> List[plt.Artist]:
             return [col_obsts, col_goals, col_agents, col_edges, *agent_labels, cost_text, *safe_text, kk_text]
 
-        def update(kk: int) -> list[plt.Artist]:
+        def update(kk: int) -> List[plt.Artist]:
             graph = tree_index(T_graph, kk)
             n_pos_t = graph.states[:-1, :2] # 最后一个node是padding，不要
             n_theta_t = graph.states[:-1, 2]
@@ -485,7 +485,7 @@ class MVE(MultiAgentEnv, ABC): # # Multi Vehicles Environment
         save_anim(ani, video_path)
 
     @abstractmethod
-    def edge_blocks(self, state: MVEEnvState) -> list[EdgeBlock]:
+    def edge_blocks(self, state: MVEEnvState) -> List[EdgeBlock]:
         pass
 
     def get_graph(self, env_state: MVEEnvState, obst_as_agent:bool = False) -> MVEEnvGraphsTuple:

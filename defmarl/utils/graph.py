@@ -2,7 +2,7 @@ import einops as ei
 import jax.numpy as jnp
 import jax.tree_util as jtu
 from jax._src.tree_util import GetAttrKey
-from typing import Generic, NamedTuple, TypeVar, get_type_hints
+from typing import Generic, NamedTuple, TypeVar, get_type_hints, List
 
 from ..utils.typing import Any, Array, Bool, Float, Int
 from .utils import merge01
@@ -183,7 +183,7 @@ class GraphsTuple(tuple, Generic[_State, _EnvState]):
 class GetGraph(NamedTuple):
     nodes: Float[Array, "n_nodes n_node_feat"]  # node features
     node_type: Int[Array, "n_nodes"]  # by default, 0 is agent
-    edge_blocks: list[EdgeBlock]
+    edge_blocks: List[EdgeBlock]
     env_states: Any
     states: Float[Array, "n_nodes n_state"]  # node state features
 

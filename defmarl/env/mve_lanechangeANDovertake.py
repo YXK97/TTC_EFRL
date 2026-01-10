@@ -5,12 +5,13 @@ import jax.numpy as jnp
 import functools as ft
 import numpy as np
 
-from typing import Optional, Tuple
+from typing import Optional, Tuple, List
 from typing_extensions import override
 from matplotlib import pyplot as plt
 from matplotlib.animation import FuncAnimation
 from matplotlib.axes import Axes
 from matplotlib.collections import LineCollection
+from matplotlib.patches import FancyArrow
 
 from .mve import MVE, MVEEnvState, MVEEnvGraphsTuple
 from .designed_scene_gen import gen_scene_randomly, gen_handmade_scene_randomly
@@ -468,10 +469,11 @@ class MVELaneChangeAndOverTake(MVE):
         obsts_theta = obsts_state[:, 4]
         obsts_bb_size = obsts_state[:, 6:8]
         obsts_radius = jnp.linalg.norm(obsts_bb_size, axis=1)
-        plot_obsts_arrow = [plt.Arrow(x=obsts_pos[i,0], y=obsts_pos[i,1],
-                                        dx=jnp.cos(obsts_theta[i]*jnp.pi/180)*obsts_radius[i]/2,
-                                        dy=jnp.sin(obsts_theta[i]*jnp.pi/180)*obsts_radius[i]/2,
-                                        width=1, color=obst_color, alpha=1.0) for i in range(len(obsts_theta))]
+        plot_obsts_arrow = [FancyArrow(x=obsts_pos[i,0], y=obsts_pos[i,1],
+                                       dx=jnp.cos(obsts_theta[i]*jnp.pi/180)*obsts_radius[i]/2,
+                                       dy=jnp.sin(obsts_theta[i]*jnp.pi/180)*obsts_radius[i]/2,
+                                       length_includes_head=True,
+                                       width=0.3, color=obst_color, alpha=1.0) for i in range(len(obsts_theta))]
         plot_obsts_rec = [plt.Rectangle(xy=tuple(obsts_pos[i,:]-obsts_bb_size[i,:]/2),
                                         width=obsts_bb_size[i,0], height=obsts_bb_size[i,1],
                                         angle=obsts_theta[i], rotation_point='center',
@@ -486,11 +488,12 @@ class MVELaneChangeAndOverTake(MVE):
         agents_theta = agents_state[:, 4]
         agents_bb_size = agents_state[:, 6:8]
         agents_radius = jnp.linalg.norm(agents_bb_size, axis=1)
-        plot_agents_arrow = [plt.Arrow(x=agents_pos[i, 0], y=agents_pos[i, 1],
-                                       dx=jnp.cos(agents_theta[i] * jnp.pi / 180) * agents_radius[i]/2,
-                                       dy=jnp.sin(agents_theta[i] * jnp.pi / 180) * agents_radius[i]/2,
-                                       width=agents_radius[i] / jnp.mean(obsts_radius),
-                                       alpha=1.0, color=agent_color) for i in range(self.num_agents)]
+        plot_agents_arrow = [FancyArrow(x=agents_pos[i, 0], y=agents_pos[i, 1],
+                                        dx=jnp.cos(agents_theta[i] * jnp.pi / 180) * agents_radius[i]/2,
+                                        dy=jnp.sin(agents_theta[i] * jnp.pi / 180) * agents_radius[i]/2,
+                                        width=agents_radius[i] / jnp.mean(obsts_radius)*0.3,
+                                        length_includes_head=True,
+                                        alpha=1.0, color=agent_color) for i in range(self.num_agents)]
         plot_agents_rec = [plt.Rectangle(xy=tuple(agents_pos[i,:]-agents_bb_size[i,:]/2),
                                          width=agents_bb_size[i,0], height=agents_bb_size[i,1],
                                          angle=agents_theta[i], rotation_point='center',
@@ -551,10 +554,10 @@ class MVELaneChangeAndOverTake(MVE):
             Vh_text = ax.text(0.99, 0.99, "Vh: []", va="top", ha="right", **text_font_opts)
 
         # init function for animation
-        def init_fn() -> list[plt.Artist]:
+        def init_fn() -> List[plt.Artist]:
             return [col_obsts, col_agents, col_edges, *agent_labels, cost_text, *safe_text, kk_text]
 
-        def update(kk: int) -> list[plt.Artist]:
+        def update(kk: int) -> List[plt.Artist]:
             graph = tree_index(T_graph, kk)
             n_pos_t = graph.states[:-1, :2] # 最后一个node是padding，不要
             n_theta_t = graph.states[:-1, 4]
@@ -625,7 +628,7 @@ class MVELaneChangeAndOverTake(MVE):
         ani = FuncAnimation(fig, update, frames=anim_T, init_func=init_fn, interval=mspf, blit=True)
         save_anim(ani, video_path)
 
-    def edge_blocks(self, state: MVEEnvState) -> list[EdgeBlock]:
+    def edge_blocks(self, state: MVEEnvState) -> List[EdgeBlock]:
         num_agents = state.agent.shape[0]
         num_goals = state.goal.shape[0]
         assert num_agents == num_goals

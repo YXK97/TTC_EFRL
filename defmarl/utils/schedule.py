@@ -1,4 +1,6 @@
 import optax
+
+from typing import Union
 from attrs import asdict, define
 
 
@@ -15,7 +17,7 @@ class Schedule:
         ...
 
 
-def as_schedule(val: Schedule | float | int) -> Schedule:
+def as_schedule(val: Union[Schedule, float, int]) -> Schedule:
     if isinstance(val, Schedule):
         return val
 

@@ -1,14 +1,14 @@
 import flax.linen as nn
 import jax.numpy as jnp
 
-from typing import Type
+from typing import Type, Union
 
 from ..utils.typing import Array
 from ..utils.utils import jax_vmap
 
 
 class RNN(nn.Module):
-    rnn_cls: Type[nn.LSTMCell] | Type[nn.GRUCell]
+    rnn_cls: Union[Type[nn.LSTMCell], Type[nn.GRUCell]]
     rnn_layers: int
 
     @nn.compact

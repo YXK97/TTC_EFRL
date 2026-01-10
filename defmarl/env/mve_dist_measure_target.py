@@ -1,7 +1,7 @@
 import jax.numpy as jnp
 import numpy as np
 
-from typing import Optional, Tuple
+from typing import Optional, Tuple, List
 
 from ..utils.graph import EdgeBlock
 from ..utils.typing import Action, Reward, Cost, Array, State
@@ -119,7 +119,7 @@ class MVEDistMeasureTarget(MVE):
 
         return cost
 
-    def edge_blocks(self, state: MVEEnvState) -> list[EdgeBlock]:
+    def edge_blocks(self, state: MVEEnvState) -> List[EdgeBlock]:
         num_agents = state.agent.shape[0]
         num_goals = state.goal.shape[0]
         assert num_agents == num_goals

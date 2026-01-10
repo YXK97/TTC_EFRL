@@ -48,7 +48,7 @@ def compute_dec_efocp_gae(
     disc_gamma: float,
     gae_lambda: float,
     discount_to_max: bool = True
-) -> tuple[Float[Array, "T a nh"], TFloat, Float[Array, "T a"]]:
+) -> Tuple[Float[Array, "T a nh"], TFloat, Float[Array, "T a"]]:
     """
     Compute GAE for stabilize-avoid. Compute it using DP, starting at V(x_T) and working backwards.
 

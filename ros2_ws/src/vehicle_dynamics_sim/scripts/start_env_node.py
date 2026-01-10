@@ -1,4 +1,3 @@
-import argparse
 import os
 os.environ["CUDA_VISIBLE_DEVICES"] = "0" # 由于是测试，没有进行数据并行的必要，强制使用第0个GPU
 import rclpy
