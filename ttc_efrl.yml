@@ -109,7 +109,7 @@ dependencies:
       - ipython==8.12.3
       - jax==0.4.10
       - jax-cuda12-pjrt==0.6.2
-      - jaxlib==0.4.10+cuda12.cudnn88
+      - https://storage.googleapis.com/jax-releases/cuda12/jaxlib-0.4.10+cuda12.cudnn88-cp38-cp38-manylinux2014_x86_64.whl
       - jaxtyping==0.2.19
       - jedi==0.19.2
       - jraph==0.0.6.dev0
