@@ -7,3 +7,7 @@ r-critic-init 1e-3 --lr-critic-decay-ratio 100 --lr-critic-warmup-iters 20000 --
 
 
 测试指令示例：def_marl_in_vehicle/test.py --epi 20 --max-step 1024 --path /home/yxk-vtd/def_marl_in_vehicle/logs/MVEDistMTarget/def-marl/seed0_1013175355
+
+
+
+需要CUDA 11.8和 cudnn 8.6
