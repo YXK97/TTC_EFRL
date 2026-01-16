@@ -76,11 +76,13 @@ class MVE(MultiAgentEnv, ABC): # # Multi Vehicles Environment
             max_step: int = 1280,
             max_travel: Optional[float] = None,
             dt: float = 0.05,
+            reward_min: float = -20,
+            reward_max: float = 0.5,
             params: dict = None
     ):
         area_size = MVE.PARAMS["default_state_range"][:4] if area_size is None else area_size
         params = MVE.PARAMS if params is None else params
-        super(MVE, self).__init__(num_agents, area_size, max_step, max_travel, dt, params)
+        super(MVE, self).__init__(num_agents, area_size, max_step, max_travel, dt, reward_min, reward_max, params)
 
     @property
     def state_dim(self) -> int:
@@ -98,13 +100,13 @@ class MVE(MultiAgentEnv, ABC): # # Multi Vehicles Environment
     def action_dim(self) -> int:
         return 2  # v:车辆质心速率（m/s）、delta:前轮转角（前轮与车辆中轴线正方向的夹角，逆时针为正，角度）
 
-    @abstractproperty
+    @property
     def reward_min(self) -> float:
-        pass
+        return self._reward_min
 
     @property
     def reward_max(self) -> float:
-        return 0.5 # TODO，貌似可以
+        return self._reward_max
 
     @property
     def n_cost(self) -> int:

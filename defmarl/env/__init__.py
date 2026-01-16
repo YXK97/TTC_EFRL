@@ -19,6 +19,8 @@ def make_env(
         full_observation: bool = False,
         max_travel: Optional[float] = None,
         num_obs: Optional[int] = None,
+        reward_min: float = -20.0,
+        reward_max: float = 0.5
 ) -> MultiAgentEnv:
     assert env_id in ENV.keys(), f'Environment {env_id} not implemented.'
     params = ENV[env_id].PARAMS
@@ -32,6 +34,8 @@ def make_env(
             num_agents=num_agents,
             area_size=area_size,
             max_travel=max_travel,
+            reward_min=reward_min,
+            reward_max=reward_max,
             params=params
         )
     else:
@@ -40,5 +44,7 @@ def make_env(
             area_size=area_size,
             max_step=max_step,
             max_travel=max_travel,
+            reward_min=reward_min,
+            reward_max=reward_max,
             params=params
         )

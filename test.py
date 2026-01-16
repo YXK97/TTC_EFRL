@@ -52,6 +52,8 @@ def test(args):
         max_step=args.max_step,
         full_observation=args.full_observation,
         area_size=config.area_size if args.area_size is None else args.area_size,
+        reward_min=config.reward_min if args.reward_min is None else args.reward_min,
+        reward_max=config.reward_max if args.reward_max is None else args.reward_max
     )
 
     path = args.path
@@ -180,6 +182,10 @@ def main():
 
     # required arguments
     parser.add_argument("--path", type=str, required=True)
+
+    # environment arguments
+    parser.add_argument("--reward_min", type=float, default=None)
+    parser.add_argument("--reward_max", type=float, default=None)
 
     # optional arguments
     parser.add_argument("--epi", type=int, default=5)

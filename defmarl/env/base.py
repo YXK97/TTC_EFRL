@@ -29,11 +29,15 @@ class MultiAgentEnv(ABC):
             max_step: int = 128,
             max_travel: Optional[float] = None,
             dt: float = 0.03,
+            reward_min: float = -20.0,
+            reward_max: float = 0.5,
             params: Optional[dict] = None
     ):
         super(MultiAgentEnv, self).__init__()
         self._num_agents = num_agents
         self._dt = dt
+        self._reward_min = reward_min
+        self._reward_max = reward_max
         if params is None:
             params = self.PARAMS
         self._params = params
@@ -106,11 +110,13 @@ class MultiAgentEnv(ABC):
     def action_dim(self) -> int:
         pass
 
-    @abstractproperty
+    @property
+    @abstractmethod
     def reward_min(self) -> float:
         pass
 
-    @abstractproperty
+    @property
+    @abstractmethod
     def reward_max(self) -> float:
         pass
 

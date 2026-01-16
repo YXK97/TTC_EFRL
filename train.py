@@ -41,14 +41,18 @@ def train(args):
         num_agents=args.num_agents,
         num_obs=args.obs,
         full_observation=args.full_observation,
-        area_size=args.area_size
+        area_size=args.area_size,
+        reward_min=args.reward_min,
+        reward_max=args.reward_max
     )
     env_test = make_env(
         env_id=args.env,
         num_agents=args.num_agents,
         num_obs=args.obs,
         full_observation=args.full_observation,
-        area_size=args.area_size
+        area_size=args.area_size,
+        reward_min=args.reward_min,
+        reward_max=args.reward_max
     )
 
      # load config
@@ -213,6 +217,8 @@ def main():
     parser.add_argument("--max-grad-norm", type=float, default=2.)
 
     # environment arguments
+    parser.add_argument("--reward-min", type=float, default=-20.)
+    parser.add_argument("--reward-max", type=float, default=0.5)
     parser.add_argument('--full-observation', action='store_true', default=False)
     parser.add_argument("--area-size", type=float, default=None)
 

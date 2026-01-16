@@ -77,11 +77,13 @@ class MVELaneChangeAndOverTake(MVE):
                  max_step: int = 256,
                  max_travel: Optional[float] = None,
                  dt: float = 0.05,
+                 reward_min: float = -17.,
+                 reward_max: float = 0.5,
                  params: dict = None
                  ):
         area_size = MVELaneChangeAndOverTake.PARAMS["rollout_state_range"][:4] if area_size is None else area_size
         params = MVELaneChangeAndOverTake.PARAMS if params is None else params
-        super(MVELaneChangeAndOverTake, self).__init__(num_agents, area_size, max_step, max_travel, dt, params)
+        super(MVELaneChangeAndOverTake, self).__init__(num_agents, area_size, max_step, max_travel, dt, reward_min, reward_max, params)
         # assert self.params["n_obsts"] == MVELaneChangeAndOverTake.PARAMS["n_obsts"], "本环境只接受2个障碍物的设置！"
         self.all_goals = jnp.zeros((num_agents, self.num_goals, self.state_dim))  # 参考点初始化
         self.all_dsYddts = jnp.zeros((num_agents, self.num_goals, 4)) # 轨迹的y方向偏移量与偏移量导数初始化
@@ -109,15 +111,6 @@ class MVELaneChangeAndOverTake(MVE):
 
     @override
     @property
-    def reward_max(self):
-        return 0.5
-
-    @property
-    def reward_min(self) -> float:
-        return -10
-
-    @override
-    @property
     def n_cost(self) -> int:
         return 4 # agent间碰撞(1) + agent-obstacle碰撞(1) + agent超出y轴范围(高+低，2)
 
@@ -137,7 +130,7 @@ class MVELaneChangeAndOverTake(MVE):
         xrange = self.params["default_state_range"][:2]
         yrange = self.params["default_state_range"][2:4]
         lanewidth = self.params["lane_width"]
-        agents, obsts, all_goals, all_dsYddts = gen_handmade_scene_randomly(key, self.num_agents, self.num_goals, xrange,
+        agents, obsts, all_goals, all_dsYddts = gen_scene_randomly(key, self.num_agents, self.num_goals, xrange,
                                                                    yrange, lanewidth, c_ycs)
         self.all_goals = all_goals
         self.all_dsYddts = all_dsYddts
