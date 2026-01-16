@@ -13,11 +13,11 @@ class Rollout(NamedTuple):
     costs: Cost
     costs_real: Cost
     dones: Done
-    log_pis: Array
+    log_pis: Optional[Array]
     next_graph: GraphsTuple
     dYddts: Optional[Array]
-    zs: Array = None
-    z_global: Array = None
+    zs: Optional[Array] = None
+    z_global: Optional[Array] = None
 
     @property
     def length(self) -> int:

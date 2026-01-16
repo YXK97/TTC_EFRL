@@ -42,7 +42,7 @@ def rollout(
     """
     key_x0, key_z0, key = jax.random.split(key, 3)
     if init_graph is None:
-        init_graph = env.reset(key_x0)
+        init_graph, _ = env.reset(key_x0)
     z0 = jax.random.uniform(key_z0, (1, 1), minval=-env.reward_max, maxval=-env.reward_min)
 
     z_key, key = jax.random.split(key, 2)
@@ -84,7 +84,7 @@ def rollout_p1step(
     """
     key_x0, key_z0, key = jax.random.split(key, 3)
     if init_graph is None:
-        init_graph = env.reset(key_x0)
+        init_graph, _ = env.reset(key_x0)
     z0 = jax.random.uniform(key_z0, (1, 1), minval=-env.reward_max, maxval=-env.reward_min)
 
     z_key, key = jax.random.split(key, 2)
@@ -97,14 +97,14 @@ def rollout_p1step(
     def body(data, key_):
         graph, rnn_state, z = data
         action, log_pi, new_rnn_state = actor(graph, z, rnn_state, key_)
-        next_graph, _, reward, cost, cost_real, goal, done, info = env.step(graph, action)
+        next_graph, _, reward, cost, cost_real, done, info = env.step(graph, action)
 
         # z dynamics
         z_next = (z + reward) / gamma
         z_next = jnp.clip(z_next, -env.reward_max, -env.reward_min)
 
         return ((next_graph, new_rnn_state, z_next),
-                (graph, action, rnn_state, reward, cost, cost_real, goal, done, log_pi, next_graph, None, z))
+                (graph, action, rnn_state, reward, cost, cost_real, done, log_pi, next_graph, None, z))
 
     keys = jax.random.split(key, env.max_episode_steps+1)
     _, (graphs, actions, rnn_states, rewards, costs, costs_real, goals, dones, log_pis, next_graphs, dsYddts, zs) = (
@@ -123,7 +123,7 @@ def eval_rollout(
         stochastic: bool = False
 ):
     key_x0, key = jax.random.split(key)
-    init_graph = env.reset(key_x0)
+    init_graph, _ = env.reset(key_x0)
     if z_fn is not None:
         z0 = jax.random.uniform(key, (env.num_agents, 1), minval=-env.reward_max, maxval=-env.reward_min)
     else:
@@ -169,7 +169,7 @@ def eval_rollout_p1step(
     与eval_rollout几乎一致，只是最后多rollout一步给需要k+1状态的reward或cost计算
     """
     key_x0, key = jax.random.split(key)
-    init_graph = env.reset(key_x0)
+    init_graph, _ = env.reset(key_x0)
     z0 = jax.random.uniform(key, (env.num_agents, 1), minval=-env.reward_max, maxval=-env.reward_min)
 
     def body(data, key_):
@@ -184,9 +184,9 @@ def eval_rollout_p1step(
             action, actor_rnn_state = actor(graph, z, actor_rnn_state)
         else:
             action, actor_rnn_state = actor(graph, z, actor_rnn_state, key_)
-        next_graph, _, reward, cost, cost_real, goal, done, info = env.step(graph, action)
+        next_graph, _, reward, cost, cost_real, done, info = env.step(graph, action)
         return ((next_graph, actor_rnn_state, Vh_rnn_state),
-                (graph, action, actor_rnn_state, reward, cost, cost_real, goal, done, None, next_graph, None, z))
+                (graph, action, actor_rnn_state, reward, cost, cost_real, done, None, next_graph, None, z))
 
     keys = jax.random.split(key, env.max_episode_steps)
     _, (graphs, actions, actor_rnn_states, rewards, costs, costs_real, dones, log_pis, next_graphs, dsYddts, zs) = (

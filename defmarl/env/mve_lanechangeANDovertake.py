@@ -74,7 +74,7 @@ class MVELaneChangeAndOverTake(MVE):
     def __init__(self,
                  num_agents: int,
                  area_size: Optional[float] = None,
-                 max_step: int = 128,
+                 max_step: int = 256,
                  max_travel: Optional[float] = None,
                  dt: float = 0.05,
                  params: dict = None
@@ -265,6 +265,7 @@ class MVELaneChangeAndOverTake(MVE):
         reward = self.get_reward(graph, action)
         cost, cost_real = self.get_cost(graph)
 
+        """
         # debug
         jax.debug.print("============================= \n"
                         "old_states: \n"
@@ -286,6 +287,7 @@ class MVELaneChangeAndOverTake(MVE):
                         new_agent_states = next_agent_states,
                         new_goal_states = next_goal_states,
                         new_obstacle_states = next_obst_states)
+        """
 
 
         return self.get_graph(next_env_state), next_dsYddts, reward, cost, cost_real, done, info
@@ -318,21 +320,21 @@ class MVELaneChangeAndOverTake(MVE):
         # 循迹奖励： 位置+角度
         # 位置奖励，和目标点的欧氏距离
         a_dist = jnp.linalg.norm(a2_goal_pos_m - a2_agent_pos_m, axis=1)
-        reward -= a_dist.mean() * 0.02
+        reward -= a_dist.mean() * 0.01
 
         # 角度奖励
         a_costheta_dist = jnp.cos((a_goal_theta_deg - a_agent_theta_deg) * jnp.pi/180)
-        reward += (a_costheta_dist.mean() - 1) * 0.002
+        reward += (a_costheta_dist.mean() - 1) * 0.001
 
         # 速度跟踪惩罚
         a_delta_v = a2_goal_v_b_kmph[:, 0] - a2_agent_v_b_kmph[:, 0]
         # reward -= (a_delta_v**2).mean() * 0.00005 # 只比较x方向（纵向）速度
-        reward -= jnp.abs(a_delta_v).mean() * 0.001
-        reward -= jnp.where(jnp.abs(a_delta_v) > self.params["v_bias"], 1., 0.).mean() * 0.01
+        reward -= jnp.abs(a_delta_v).mean() * 0.0005
+        reward -= jnp.where(jnp.abs(a_delta_v) > self.params["v_bias"], 1., 0.).mean() * 0.005
 
         # 动作惩罚
-        reward -= (ad_action[:, 0]**2).mean() * 0.0001
-        reward -= (ad_action[:, 1]**2).mean() * 0.0002
+        reward -= (ad_action[:, 0]**2).mean() * 0.00005
+        reward -= (ad_action[:, 1]**2).mean() * 0.0001
 
         return reward
 
