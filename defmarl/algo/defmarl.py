@@ -306,7 +306,7 @@ class DefMARL(Algorithm):
         def get_init_graph_(init_graph_key: PRNGKey, memory: Rollout):
             reset_key, rng_key, idx_key = jr.split(init_graph_key, 3)
             rng = jr.uniform(rng_key, ())
-            reset_graph = self._env.reset(reset_key)
+            reset_graph, _ = self._env.reset(reset_key)
             if memory is not None:
                 idx = jr.randint(idx_key, (), 0, memory.dones.shape[0])
                 memory_graph = tree_index(memory.graph, idx)

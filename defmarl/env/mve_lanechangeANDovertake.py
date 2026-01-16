@@ -43,20 +43,19 @@ class MVELaneChangeAndOverTake(MVE):
         "obst_bb_size": jnp.array([4., 2.]), # bounding box的[width, height] m
 
         # [x_l, x_h, y_l, y_h, vx_l, vx_h, vy_l, vy_h, θ_l, θ_h, dθdt_l, dθdt_h, \
-        # bbw_l, bbw_h, bbh_l, bbh_h]
+        # bbw_l, bbw_h, bbh_l, bbh_h
         # 单位：x,y,bbw,bbh: m  vx,vy: km/h,  θ: °, dθdt: °/s
         # 速度约束通过车身坐标系对纵向速度约束来进行
         "default_state_range": jnp.array([-100., 100., -4.5, 4.5, -INF, INF, -INF, INF, -180., 180., -INF, INF,
         -INF, INF, -INF, INF]), # 默认范围，用于指示正常工作的状态范围
         "rollout_state_range": jnp.array([-120., 220., -10., 10., -INF, INF, -INF, INF, -180., 180., -INF, INF,
         -INF, INF, -INF, INF]), # rollout过程中的限制，强制约束
-        "rollout_state_b_range": jnp.array([-INF, INF, -INF, INF, 20., 100., -INF, INF, -INF, INF, -INF, INF,
+        "rollout_state_b_range": jnp.array([-INF, INF, -INF, INF, 30., 100., -INF, INF, -INF, INF, -INF, INF,
         -INF, INF, -INF, INF]), # rollout过程中在车身坐标系下状态约束，主要对纵向速度有约束，动力学模型不允许倒车
         "agent_init_state_range": jnp.array([-100., -50., -3., 3., -INF, INF, -INF, INF, -180., 180., -INF, INF,
         -INF, INF, -INF, INF]), # 用于agent初始化的状态范围
         "terminal_state_range": jnp.array([50., 100., -3., 3., -INF, INF, -INF, INF, -180., 180., -INF, INF,
         -INF, INF, -INF, INF]), # 随机生成terminal时的状态范围
-        # "obst_state_range": jnp.array([-15., 20., -7., 7.5, 0., 360., 0., 0.]), # 随机生成obstacle的状态范围
 
         "lane_width": 3, # 车道宽度，m
         "v_bias": 5, # 可允许的速度偏移量
@@ -85,6 +84,7 @@ class MVELaneChangeAndOverTake(MVE):
         super(MVELaneChangeAndOverTake, self).__init__(num_agents, area_size, max_step, max_travel, dt, params)
         # assert self.params["n_obsts"] == MVELaneChangeAndOverTake.PARAMS["n_obsts"], "本环境只接受2个障碍物的设置！"
         self.all_goals = jnp.zeros((num_agents, self.num_goals, self.state_dim))  # 参考点初始化
+        self.all_dsYddts = jnp.zeros((num_agents, self.num_goals, 4)) # 轨迹的y方向偏移量与偏移量导数初始化
         self.num_obsts = 0 # 初始化
 
     @override
@@ -131,22 +131,24 @@ class MVELaneChangeAndOverTake(MVE):
         return 3200 # 每个agent参考轨迹点的数量
 
     @override
-    def reset(self, key: Array) -> GraphsTuple:
+    def reset(self, key: Array) -> Tuple[GraphsTuple, jnp.ndarray]:
         """使用场景类别生成函数进行agent、goal和obstacle的生成"""
         c_ycs = self.params["lane_centers"]
         xrange = self.params["default_state_range"][:2]
         yrange = self.params["default_state_range"][2:4]
         lanewidth = self.params["lane_width"]
-        agents, obsts, all_goals = gen_scene_randomly(key, self.num_agents, self.num_goals, xrange, yrange,
-                                                             lanewidth, c_ycs)
+        agents, obsts, all_goals, all_dsYddts = gen_handmade_scene_randomly(key, self.num_agents, self.num_goals, xrange,
+                                                                   yrange, lanewidth, c_ycs)
         self.all_goals = all_goals
+        self.all_dsYddts = all_dsYddts
         goals_init_indices = find_closest_goal_indices(agents, all_goals)
         agents_indices = jnp.arange(agents.shape[0])
         goals = all_goals[agents_indices, goals_init_indices, :]
+        dsYddts = all_dsYddts[agents_indices, goals_init_indices, :]
         env_state = MVEEnvState(agents, goals, obsts)
         self.num_obsts = obsts.shape[0]
 
-        return self.get_graph(env_state)
+        return self.get_graph(env_state), dsYddts
 
     @override
     def agent_step_euler(self, aS_agent_states: AgentState, ad_action: Action) -> AgentState:
@@ -230,29 +232,29 @@ class MVELaneChangeAndOverTake(MVE):
         assert o_obst_states_new.shape == (num_obsts, self.state_dim)
         return o_obst_states_new
 
-    def goal_step(self, aS_agent_states_new: AgentState) -> State:
+    def goal_dsYddt_step(self, aS_agent_states_new: AgentState) -> Tuple[State, jnp.ndarray]:
         """根据下一步的agent位置，寻找相应的距离最近的目标点作为参考"""
         a_goals_indices = find_closest_goal_indices(aS_agent_states_new, self.all_goals)
         a_agents_indices = jnp.arange(aS_agent_states_new.shape[0])
         aS_goal_states = self.all_goals[a_agents_indices, a_goals_indices, :]
+        a4_dsYddts = self.all_dsYddts[a_agents_indices, a_goals_indices, :]
 
-        return aS_goal_states
+        return aS_goal_states, a4_dsYddts
 
     @override
     def step(
             self, graph: MVEEnvGraphsTuple, action: Action, get_eval_info: bool = False
-    ) -> Tuple[MVEEnvGraphsTuple, Reward, Cost, Cost, Done, Info]:
+    ) -> Tuple[MVEEnvGraphsTuple, jnp.ndarray, Reward, Cost, Cost, Done, Info]:
         # get information from graph
         agent_states = graph.type_states(type_idx=MVE.AGENT, n_type=self.num_agents)
-        goal_states = graph.type_states(type_idx=MVE.GOAL, n_type=self.num_agents)
+        goal_states = graph.type_states(type_idx=MVE.GOAL, n_type=self.num_agents) # debug
         obst_states = graph.type_states(type_idx=MVE.OBST, n_type=self.num_obsts)
         next_obst_states = self.obst_step_euler(obst_states)
 
         # calculate next graph
         action = self.transform_action(action)
         next_agent_states = self.agent_step_euler(agent_states, action)
-        next_goal_states = self.goal_step(next_agent_states)
-        # goal = next_goal_states[:, :2]
+        next_goal_states, next_dsYddts = self.goal_dsYddt_step(next_agent_states)
         next_env_state = MVEEnvState(next_agent_states, next_goal_states, next_obst_states)
         info = {}
 
@@ -263,7 +265,6 @@ class MVELaneChangeAndOverTake(MVE):
         reward = self.get_reward(graph, action)
         cost, cost_real = self.get_cost(graph)
 
-        """
         # debug
         jax.debug.print("============================= \n"
                         "old_states: \n"
@@ -285,10 +286,9 @@ class MVELaneChangeAndOverTake(MVE):
                         new_agent_states = next_agent_states,
                         new_goal_states = next_goal_states,
                         new_obstacle_states = next_obst_states)
-        """
 
 
-        return self.get_graph(next_env_state), reward, cost, cost_real, done, info
+        return self.get_graph(next_env_state), next_dsYddts, reward, cost, cost_real, done, info
 
     def get_reward(self, graph: MVEEnvGraphsTuple, ad_action: Action) -> Reward:
         num_agents = graph.env_states.agent.shape[0]
@@ -541,7 +541,8 @@ class MVELaneChangeAndOverTake(MVE):
         if Ta_is_unsafe is not None:
             safe_text = [ax.text(0.99, 1.00, "Unsafe: {}", va="bottom", ha="right", **text_font_opts)]
         kk_text = ax.text(0.99, 1.04, "kk=0", va="bottom", ha="right", **text_font_opts)
-        z_text = ax.text(0.5, 1.04, "z: []", va="bottom", ha="center", **text_font_opts)
+        if rollout.zs is not None:
+            z_text = ax.text(0.5, 1.04, "z: []", va="bottom", ha="center", **text_font_opts)
 
         # add agent labels
         label_font_opts = dict(
@@ -623,7 +624,8 @@ class MVELaneChangeAndOverTake(MVE):
             kk_text.set_text("kk={:04}".format(kk))
 
             # Update the z text.
-            z_text.set_text(f"z: {rollout.zs[kk]}")
+            if rollout.zs is not None:
+                z_text.set_text(f"z: {rollout.zs[kk]}")
 
             if "Vh" in viz_opts:
                 Vh_text.set_text(f"Vh: {viz_opts['Vh'][kk]}")
@@ -755,20 +757,24 @@ class MVELaneChangeAndOverTake(MVE):
                                         jnp.empty((0, self.state_dim)))
         return GetGraph(node_feats, node_type, edge_blocks, new_env_state, states).to_padded()
 
-    def state_lim(self, state: Optional[State] = None) -> Tuple[State, State]:
+    @override
+    def state_lim(self, state: Optional[State]) -> Tuple[State, State]:
         """世界坐标系下的状态约束"""
         lower_lim = self.params["rollout_state_range"][jnp.array([0, 2, 4, 6, 8, 10, 12, 14])]
         upper_lim = self.params["rollout_state_range"][jnp.array([1, 3, 5, 7, 9, 11, 13, 15])]
         return lower_lim, upper_lim
 
     def clip_state_b(self, state: State) -> State:
-        lower_limit, upper_limit = self.state_b_lim(state)
-        return jnp.clip(state, lower_limit, upper_limit)
+        vx_lower_limit, vx_upper_limit = self.vx_b_lim
+        a_old_vx = state[:, 2]
+        clipped_state = state.at[:, 2].set(jnp.clip(a_old_vx, vx_lower_limit, vx_upper_limit))
+        return clipped_state
 
-    def state_b_lim(self, state: Optional[State] = None) -> Tuple[State, State]:
-        """车身坐标系下的状态约束"""
-        lower_lim = self.params["rollout_state_b_range"][jnp.array([0, 2, 4, 6, 8, 10, 12, 14])]
-        upper_lim = self.params["rollout_state_b_range"][jnp.array([1, 3, 5, 7, 9, 11, 13, 15])]
+    @property
+    def vx_b_lim(self) -> Tuple[State, State]:
+        """车身坐标系下的纵向速度约束，理想自行车动力学模型速度不能过低，km/h"""
+        lower_lim = self.params["rollout_state_b_range"][4]
+        upper_lim = self.params["rollout_state_b_range"][5]
         return lower_lim, upper_lim
 
     @override

@@ -13,13 +13,15 @@ def generate_lanechange_path_points(xrange: Array,
                                     num_points: int,
                                     S_start_state: AgentState,
                                     S_terminal_state: AgentState,
-                                    points_interval: int=0.1) -> PathRefs:
+                                    points_interval: int=0.1) -> Tuple[PathRefs, jnp.ndarray]:
     """生成由水平直线-五次多项式曲线-水平直线组成的分段参考轨迹点，默认每0.1m生成一个参考点，共生成3200个"""
     # 生成中间的五次多项式
-    one6_patheffs_f, one6_patheffs_df, one6_patheffs_ddf = calc_quintic_eff(S_start_state[None,:], S_terminal_state[None,:])
+    one6_patheffs_f, one6_patheffs_df, one6_patheffs_ddf, one6_patheffs_dddf = \
+        calc_quintic_eff(S_start_state[None,:], S_terminal_state[None,:])
     quintic_f = quintic_polynomial_f(one6_patheffs_f)
     quintic_df = quintic_polynomial_f(one6_patheffs_df)
     quintic_ddf = quintic_polynomial_f(one6_patheffs_ddf)
+    quintic_dddf = quintic_polynomial_f(one6_patheffs_dddf)
     # 构建三个值的常数函数
     zeros = jnp.zeros((1, 1), dtype=jnp.float32)
     const_f_ystart = const_f(S_start_state[1][None, None])
@@ -32,12 +34,15 @@ def generate_lanechange_path_points(xrange: Array,
                               S_start_state[0][None, None], S_terminal_state[0][None, None])
     poly_sec_ddf = three_sec_f(const_f_zeros, quintic_ddf, const_f_zeros,
                                S_start_state[0][None, None], S_terminal_state[0][None, None])
+    poly_sec_dddf = three_sec_f(const_f_zeros, quintic_dddf, const_f_zeros,
+                                S_start_state[0][None, None], S_terminal_state[0][None, None])
     # 构建路径点
     onen_xs = jnp.linspace(start=xrange[0][None], stop=xrange[0][None] + (num_points + 1) * points_interval, num=num_points,
                          dtype=jnp.float32).T
     onen_ys = poly_sec_f(onen_xs)
     onen_dys = poly_sec_df(onen_xs)
     onen_ddys = poly_sec_ddf(onen_xs)
+    onen_dddys = poly_sec_dddf(onen_xs)
     onen_thetas_rad = jnp.arctan(onen_dys)
     onen_thetas_deg = onen_thetas_rad * 180 / jnp.pi
     # state: x y vx vy θ dθdt bw bh
@@ -51,14 +56,22 @@ def generate_lanechange_path_points(xrange: Array,
     onenS_goals = jnp.stack([onen_xs, onen_ys, onen_vxs_kmph, onen_vys_kmph, onen_thetas_deg, onen_dthetas_degps, onen_zeros, onen_zeros],
                           axis=2)
     anS_goals = jnp.repeat(onenS_goals, num_agents, axis=0)
-    return anS_goals
+
+    # 计算dsYddts
+    onen_vxs_mps = onen_vxs_kmph / 3.6
+    onen_dYddt = onen_vxs_mps * onen_dys
+    onen_ddYddt = onen_vxs_mps**2 * onen_ddys
+    onen_dddYddt = onen_vxs_mps**3 * onen_dddys
+    onen4_dsYddts = jnp.stack([onen_ys, onen_dYddt, onen_ddYddt, onen_dddYddt], axis=2)
+    an4_dsYddts = jnp.repeat(onen4_dsYddts, num_agents, axis=0)
+    return anS_goals, an4_dsYddts
 
 def generate_horizontal_path_points(xrange: Array,
                                     num_agents: int,
                                     num_points: int,
                                     start_y: jnp.ndarray, # shape应为()
                                     terminal_vx: jnp.ndarray, # shape应为()
-                                    points_interval: int = 0.1) -> PathRefs:
+                                    points_interval: int = 0.1) -> Tuple[PathRefs, jnp.ndarray]:
     """生成由水平直线参考轨迹点，默认每0.1m生成一个参考点，共生成3200个"""
     assert start_y.shape == terminal_vx.shape == ()
     # 构建路径点
@@ -77,7 +90,11 @@ def generate_horizontal_path_points(xrange: Array,
     onenS_goals = jnp.stack([onen_xs, onen_ys, onen_vxs_kmph, onen_vys_kmph, onen_thetas_deg, onen_dthetas_degps, onen_zeros, onen_zeros],
                           axis=2)
     anS_goals = jnp.repeat(onenS_goals, num_agents, axis=0)
-    return anS_goals
+
+    # 计算dsYddts
+    onen4_dsYddts = jnp.stack([onen_ys, onen_zeros, onen_zeros, onen_zeros], axis=2)
+    an4_dsYddts = jnp.repeat(onen4_dsYddts, num_agents, axis=0)
+    return anS_goals, an4_dsYddts
 
 
 class SceneBase(ABC):
@@ -137,7 +154,7 @@ class SceneBase(ABC):
         return self.num_moving_obsts + self.num_static_obsts
 
     @abstractmethod
-    def make(self) -> Tuple[AgentState, ObstState, PathRefs]:
+    def make(self) -> Tuple[AgentState, ObstState, PathRefs, jnp.ndarray]:
         pass
 
 
@@ -212,7 +229,7 @@ class LaneChangeMiddleStaticEdgeFastMoving(LaneChangeANDOvertakeScene):
     def num_static_obsts(self) -> int:
         return 1
 
-    def make(self) -> Tuple[AgentState, ObstState, PathRefs]:
+    def make(self) -> Tuple[AgentState, ObstState, PathRefs, jnp.ndarray]:
         start_x_key, terminal_x_key, start_y_key, start_terminal_vx_key, agent_x_key, agent_y_key, agent_vx_key, \
             sobst_y_key, sobst_theta_key, mobst_x_key, mobst_y_key, mobst_vx_key = jr.split(self.key, 12)
         num_lanes = self.num_lanes
@@ -230,8 +247,8 @@ class LaneChangeMiddleStaticEdgeFastMoving(LaneChangeANDOvertakeScene):
         Sm3_other0 = jnp.zeros((self.state_dim-3,), dtype=jnp.float32)
         S_start_state = jnp.concatenate([start_x[None], start_y[None], start_vx[None], Sm3_other0])
         S_terminal_state = jnp.concatenate([terminal_x[None], terminal_y[None], terminal_vx[None], Sm3_other0])
-        anS_goals = generate_lanechange_path_points(self.xrange, self.num_agents, self.num_ref_points, S_start_state,
-                                                    S_terminal_state)
+        anS_goals, an4_dsYddts = generate_lanechange_path_points(self.xrange, self.num_agents, self.num_ref_points,
+                                                                 S_start_state, S_terminal_state)
 
         # 生成初始agent，x坐标都一样，y和vx可不一样，其它的都是0
         agent_x = jr.uniform(agent_x_key, shape=(), dtype=jnp.float32, minval=self.xrange[0], maxval=start_x)
@@ -257,7 +274,7 @@ class LaneChangeMiddleStaticEdgeFastMoving(LaneChangeANDOvertakeScene):
         S_mobst_state = jnp.concatenate([mobst_x[None], mobst_y[None], mobst_vx[None], Sm3_other0], axis=0)
         oS_obst_state = jnp.stack([S_sobst_state, S_mobst_state], axis=0)
 
-        return aS_agent_state, oS_obst_state, anS_goals
+        return aS_agent_state, oS_obst_state, anS_goals, an4_dsYddts
 
 
 class LaneChangeMiddleStaticEdgeSlowMoving(LaneChangeANDOvertakeScene):
@@ -294,7 +311,7 @@ class LaneChangeMiddleStaticEdgeSlowMoving(LaneChangeANDOvertakeScene):
     def num_static_obsts(self) -> int:
         return 1
 
-    def make(self) -> Tuple[AgentState, ObstState, PathRefs]:
+    def make(self) -> Tuple[AgentState, ObstState, PathRefs, jnp.ndarray]:
         start_x_key, terminal_x_key, start_y_key, start_terminal_vx_key, agent_x_key, agent_y_key, agent_vx_key, \
             sobst_y_key, sobst_theta_key, mobst_x_key, mobst_y_key, mobst_vx_key = jr.split(self.key, 12)
         num_lanes = self.num_lanes
@@ -312,8 +329,8 @@ class LaneChangeMiddleStaticEdgeSlowMoving(LaneChangeANDOvertakeScene):
         Sm3_other0 = jnp.zeros((self.state_dim-3,), dtype=jnp.float32)
         S_start_state = jnp.concatenate([start_x[None], start_y[None], start_vx[None], Sm3_other0])
         S_terminal_state = jnp.concatenate([terminal_x[None], terminal_y[None], terminal_vx[None], Sm3_other0])
-        anS_goals = generate_lanechange_path_points(self.xrange, self.num_agents, self.num_ref_points, S_start_state,
-                                                    S_terminal_state)
+        anS_goals, an4_dsYddts = generate_lanechange_path_points(self.xrange, self.num_agents, self.num_ref_points,
+                                                                 S_start_state, S_terminal_state)
 
         # 生成初始agent，x坐标都一样，y和vx可不一样，其它的都是0
         agent_x = jr.uniform(agent_x_key, shape=(), dtype=jnp.float32, minval=self.xrange[0], maxval=start_x)
@@ -340,7 +357,7 @@ class LaneChangeMiddleStaticEdgeSlowMoving(LaneChangeANDOvertakeScene):
         S_mobst_state = jnp.concatenate([mobst_x[None], mobst_y[None], mobst_vx[None], Sm3_other0], axis=0)
         oS_obst_state = jnp.stack([S_sobst_state, S_mobst_state], axis=0)
 
-        return aS_agent_state, oS_obst_state, anS_goals
+        return aS_agent_state, oS_obst_state, anS_goals, an4_dsYddts
 
 
 class LaneChangeEdgeStaticMiddleFastMoving(LaneChangeANDOvertakeScene):
@@ -377,7 +394,7 @@ class LaneChangeEdgeStaticMiddleFastMoving(LaneChangeANDOvertakeScene):
     def num_static_obsts(self) -> int:
         return 1
 
-    def make(self) -> Tuple[AgentState, ObstState, PathRefs]:
+    def make(self) -> Tuple[AgentState, ObstState, PathRefs, jnp.ndarray]:
         start_x_key, terminal_x_key, start_y_key, start_terminal_vx_key, agent_x_key, agent_y_key, agent_vx_key, \
             sobst_y_key, sobst_theta_key, mobst_x_key, mobst_y_key, mobst_vx_key = jr.split(self.key, 12)
         num_lanes = self.num_lanes
@@ -395,9 +412,8 @@ class LaneChangeEdgeStaticMiddleFastMoving(LaneChangeANDOvertakeScene):
         Sm3_other0 = jnp.zeros((self.state_dim - 3,), dtype=jnp.float32)
         S_start_state = jnp.concatenate([start_x[None], start_y[None], start_vx[None], Sm3_other0])
         S_terminal_state = jnp.concatenate([terminal_x[None], terminal_y[None], terminal_vx[None], Sm3_other0])
-        anS_goals = generate_lanechange_path_points(self.xrange, self.num_agents, self.num_ref_points, S_start_state,
-                                                    S_terminal_state)
-        aS_goal_init = anS_goals[:, 0, :]
+        anS_goals, an4_dsYddts = generate_lanechange_path_points(self.xrange, self.num_agents, self.num_ref_points,
+                                                                 S_start_state, S_terminal_state)
 
         # 生成初始agent，x坐标都一样，y和vx可不一样，其它的都是0
         agent_x = jr.uniform(agent_x_key, shape=(), dtype=jnp.float32, minval=self.xrange[0], maxval=start_x)
@@ -425,7 +441,7 @@ class LaneChangeEdgeStaticMiddleFastMoving(LaneChangeANDOvertakeScene):
         S_mobst_state = jnp.concatenate([mobst_x[None], mobst_y[None], mobst_vx[None], Sm3_other0], axis=0)
         oS_obst_state = jnp.stack([S_sobst_state, S_mobst_state], axis=0)
 
-        return aS_agent_state, oS_obst_state, anS_goals
+        return aS_agent_state, oS_obst_state, anS_goals, an4_dsYddts
 
 
 class LaneChangeEdgeStaticMiddleSlowMoving(LaneChangeANDOvertakeScene):
@@ -462,7 +478,7 @@ class LaneChangeEdgeStaticMiddleSlowMoving(LaneChangeANDOvertakeScene):
     def num_static_obsts(self) -> int:
         return 1
 
-    def make(self) -> Tuple[AgentState, ObstState, PathRefs]:
+    def make(self) -> Tuple[AgentState, ObstState, PathRefs, jnp.ndarray]:
         start_x_key, terminal_x_key, start_y_key, start_terminal_vx_key, agent_x_key, agent_y_key, agent_vx_key, \
             sobst_y_key, sobst_theta_key, mobst_x_key, mobst_y_key, mobst_vx_key = jr.split(self.key, 12)
         num_lanes = self.num_lanes
@@ -480,9 +496,8 @@ class LaneChangeEdgeStaticMiddleSlowMoving(LaneChangeANDOvertakeScene):
         Sm3_other0 = jnp.zeros((self.state_dim - 3,), dtype=jnp.float32)
         S_start_state = jnp.concatenate([start_x[None], start_y[None], start_vx[None], Sm3_other0])
         S_terminal_state = jnp.concatenate([terminal_x[None], terminal_y[None], terminal_vx[None], Sm3_other0])
-        anS_goals = generate_lanechange_path_points(self.xrange, self.num_agents, self.num_ref_points, S_start_state,
-                                                    S_terminal_state)
-        aS_goal_init = anS_goals[:, 0, :]
+        anS_goals, an4_dsYddts = generate_lanechange_path_points(self.xrange, self.num_agents, self.num_ref_points,
+                                                                 S_start_state, S_terminal_state)
 
         # 生成初始agent，x坐标都一样，y和vx可不一样，其它的都是0
         agent_x = jr.uniform(agent_x_key, shape=(), dtype=jnp.float32, minval=self.xrange[0], maxval=start_x)
@@ -510,7 +525,7 @@ class LaneChangeEdgeStaticMiddleSlowMoving(LaneChangeANDOvertakeScene):
         S_mobst_state = jnp.concatenate([mobst_x[None], mobst_y[None], mobst_vx[None], Sm3_other0], axis=0)
         oS_obst_state = jnp.stack([S_sobst_state, S_mobst_state], axis=0)
 
-        return aS_agent_state, oS_obst_state, anS_goals
+        return aS_agent_state, oS_obst_state, anS_goals, an4_dsYddts
 
 
 class OvertakeEdgeStaticMiddleFastMoving(LaneChangeANDOvertakeScene):
@@ -547,7 +562,7 @@ class OvertakeEdgeStaticMiddleFastMoving(LaneChangeANDOvertakeScene):
     def num_static_obsts(self) -> int:
         return 1
 
-    def make(self) -> Tuple[AgentState, ObstState, PathRefs]:
+    def make(self) -> Tuple[AgentState, ObstState, PathRefs, jnp.ndarray]:
         start_x_key, terminal_x_key, start_y_key, start_terminal_vx_key, agent_x_key, agent_vx_key, \
             sobst_y_key, sobst_theta_key, mobst_x_key, mobst_y_key, mobst_vx_key = jr.split(self.key, 11)
         num_lanes = self.num_lanes
@@ -562,8 +577,8 @@ class OvertakeEdgeStaticMiddleFastMoving(LaneChangeANDOvertakeScene):
         terminal_vx = jr.uniform(start_terminal_vx_key, shape=(), dtype=jnp.float32,
                                             minval=60, maxval=90)  # 60 ~ 90 km/h
         Sm3_other0 = jnp.zeros((self.state_dim - 3,), dtype=jnp.float32)
-        anS_goals = generate_horizontal_path_points(self.xrange, self.num_agents, self.num_ref_points, start_y,
-                                                    terminal_vx)
+        anS_goals, an4_dsYddts = generate_horizontal_path_points(self.xrange, self.num_agents, self.num_ref_points,
+                                                                 start_y, terminal_vx)
 
         # 生成初始agent，x和y坐标都一样，vx可不一样，其它的都是0
         agent_x = jr.uniform(agent_x_key, shape=(), dtype=jnp.float32, minval=self.xrange[0], maxval=start_x)
@@ -591,7 +606,7 @@ class OvertakeEdgeStaticMiddleFastMoving(LaneChangeANDOvertakeScene):
         S_mobst_state = jnp.concatenate([mobst_x[None], mobst_y[None], mobst_vx[None], Sm3_other0], axis=0)
         oS_obst_state = jnp.stack([S_sobst_state, S_mobst_state], axis=0)
 
-        return aS_agent_state, oS_obst_state, anS_goals
+        return aS_agent_state, oS_obst_state, anS_goals, an4_dsYddts
 
 
 class OvertakeEdgeStaticMiddleSlowMoving(LaneChangeANDOvertakeScene):
@@ -628,7 +643,7 @@ class OvertakeEdgeStaticMiddleSlowMoving(LaneChangeANDOvertakeScene):
     def num_static_obsts(self) -> int:
         return 1
 
-    def make(self) -> Tuple[AgentState, ObstState, PathRefs]:
+    def make(self) -> Tuple[AgentState, ObstState, PathRefs, jnp.ndarray]:
         start_x_key, terminal_x_key, start_y_key, start_terminal_vx_key, agent_x_key, agent_vx_key, \
             sobst_y_key, sobst_theta_key, mobst_x_key, mobst_y_key, mobst_vx_key = jr.split(self.key, 11)
         num_lanes = self.num_lanes
@@ -643,9 +658,8 @@ class OvertakeEdgeStaticMiddleSlowMoving(LaneChangeANDOvertakeScene):
         terminal_vx = jr.uniform(start_terminal_vx_key, shape=(), dtype=jnp.float32,
                                             minval=60, maxval=90)  # 60 ~ 90 km/h
         Sm3_other0 = jnp.zeros((self.state_dim - 3,), dtype=jnp.float32)
-        anS_goals = generate_horizontal_path_points(self.xrange, self.num_agents, self.num_ref_points, start_y,
-                                                    terminal_vx)
-        aS_goal_init = anS_goals[:, 0, :]
+        anS_goals, an4_dsYddts = generate_horizontal_path_points(self.xrange, self.num_agents, self.num_ref_points,
+                                                                 start_y, terminal_vx)
 
         # 生成初始agent，x和y坐标都一样，vx可不一样，其它的都是0
         agent_x = jr.uniform(agent_x_key, shape=(), dtype=jnp.float32, minval=self.xrange[0], maxval=start_x)
@@ -673,7 +687,7 @@ class OvertakeEdgeStaticMiddleSlowMoving(LaneChangeANDOvertakeScene):
         S_mobst_state = jnp.concatenate([mobst_x[None], mobst_y[None], mobst_vx[None], Sm3_other0], axis=0)
         oS_obst_state = jnp.stack([S_sobst_state, S_mobst_state], axis=0)
 
-        return aS_agent_state, oS_obst_state, anS_goals
+        return aS_agent_state, oS_obst_state, anS_goals, an4_dsYddts
 
 
 class OvertakeEdgeMiddleStaticsEdgeFastMoving(LaneChangeANDOvertakeScene):
@@ -711,7 +725,7 @@ class OvertakeEdgeMiddleStaticsEdgeFastMoving(LaneChangeANDOvertakeScene):
     def num_static_obsts(self) -> int:
         return 2
 
-    def make(self) -> Tuple[AgentState, ObstState, PathRefs]:
+    def make(self) -> Tuple[AgentState, ObstState, PathRefs, jnp.ndarray]:
         start_x_key, terminal_x_key, start_terminal_vx_key, agent_x_key, agent_vx_key, sobst2_x_key, \
             sobst2_y_key, sobst_theta_key, mobst_x_key, mobst_y_key, mobst_vx_key = jr.split(self.key, 11)
         num_lanes = self.num_lanes
@@ -726,8 +740,8 @@ class OvertakeEdgeMiddleStaticsEdgeFastMoving(LaneChangeANDOvertakeScene):
         terminal_vx = jr.uniform(start_terminal_vx_key, shape=(), dtype=jnp.float32,
                                             minval=70, maxval=80)  # 70 ~ 80 km/h
         Sm3_other0 = jnp.zeros((self.state_dim - 3,), dtype=jnp.float32)
-        anS_goals = generate_horizontal_path_points(self.xrange, self.num_agents, self.num_ref_points, start_y,
-                                                    terminal_vx)
+        anS_goals, an4_dsYddts = generate_horizontal_path_points(self.xrange, self.num_agents, self.num_ref_points,
+                                                                 start_y, terminal_vx)
 
         # 生成初始agent，x和y坐标都一样，vx可不一样，其它的都是0
         agent_x = jr.uniform(agent_x_key, shape=(), dtype=jnp.float32, minval=self.xrange[0], maxval=start_x)
@@ -763,7 +777,7 @@ class OvertakeEdgeMiddleStaticsEdgeFastMoving(LaneChangeANDOvertakeScene):
         S_mobst_state = jnp.concatenate([mobst_x[None], mobst_y[None], mobst_vx[None], Sm3_other0], axis=0)
         oS_obst_state = jnp.stack([S_sobst1_state, S_obst2_state, S_mobst_state], axis=0)
 
-        return aS_agent_state, oS_obst_state, anS_goals
+        return aS_agent_state, oS_obst_state, anS_goals, an4_dsYddts
 
 
 class OvertakeEdgeMiddleStaticsEdgeSlowMoving(LaneChangeANDOvertakeScene):
@@ -801,7 +815,7 @@ class OvertakeEdgeMiddleStaticsEdgeSlowMoving(LaneChangeANDOvertakeScene):
     def num_static_obsts(self) -> int:
         return 2
 
-    def make(self) -> Tuple[AgentState, ObstState, PathRefs]:
+    def make(self) -> Tuple[AgentState, ObstState, PathRefs, jnp.ndarray]:
         start_x_key, terminal_x_key, start_terminal_vx_key, agent_x_key, agent_vx_key, sobst2_x_key, \
             sobst2_y_key, sobst_theta_key, mobst_x_key, mobst_y_key, mobst_vx_key = jr.split(self.key, 11)
         num_lanes = self.num_lanes
@@ -816,8 +830,8 @@ class OvertakeEdgeMiddleStaticsEdgeSlowMoving(LaneChangeANDOvertakeScene):
         terminal_vx = jr.uniform(start_terminal_vx_key, shape=(), dtype=jnp.float32,
                                             minval=70, maxval=80)  # 70 ~ 80 km/h
         Sm3_other0 = jnp.zeros((self.state_dim - 3,), dtype=jnp.float32)
-        anS_goals = generate_horizontal_path_points(self.xrange, self.num_agents, self.num_ref_points, start_y,
-                                                    terminal_vx)
+        anS_goals, an4_dsYddts = generate_horizontal_path_points(self.xrange, self.num_agents, self.num_ref_points,
+                                                                 start_y, terminal_vx)
 
         # 生成初始agent，x和y坐标都一样，vx可不一样，其它的都是0
         agent_x = jr.uniform(agent_x_key, shape=(), dtype=jnp.float32, minval=self.xrange[0], maxval=start_x)
@@ -853,7 +867,7 @@ class OvertakeEdgeMiddleStaticsEdgeSlowMoving(LaneChangeANDOvertakeScene):
         S_mobst_state = jnp.concatenate([mobst_x[None], mobst_y[None], mobst_vx[None], Sm3_other0], axis=0)
         oS_obst_state = jnp.stack([S_sobst1_state, S_obst2_state, S_mobst_state], axis=0)
 
-        return aS_agent_state, oS_obst_state, anS_goals
+        return aS_agent_state, oS_obst_state, anS_goals, an4_dsYddts
 
 
 class OvertakeInLowSpeed(SceneBase):
@@ -911,7 +925,7 @@ class OvertakeInLowSpeed(SceneBase):
     def num_static_obsts(self) -> int:
         return 1
 
-    def make(self) -> Tuple[AgentState, ObstState, PathRefs]:
+    def make(self) -> Tuple[AgentState, ObstState, PathRefs, jnp.ndarray]:
         ref_y_key, ref_vx_key, agent_x_key, agent_y_key, agent_vx_key, sobst_x_key, mobst_x_key, mobst_vx_key \
             = jr.split(self.key, 8)
         num_lanes = self.num_lanes
@@ -919,7 +933,7 @@ class OvertakeInLowSpeed(SceneBase):
         # 生成轨迹
         ref_y = jr.choice(ref_y_key, self.lane_centers, shape=())
         ref_vx = jr.uniform(ref_vx_key, shape=(), dtype=jnp.float32, minval=20, maxval=30)
-        anS_goals = generate_horizontal_path_points(self.xrange, self.num_agents, self.num_ref_points, ref_y, ref_vx)
+        anS_goals, an4_dsYddts = generate_horizontal_path_points(self.xrange, self.num_agents, self.num_ref_points, ref_y, ref_vx)
 
         # 生成初始agent，x,y,vx都可不一样，其它的都是0
         a_agent_x = jr.uniform(agent_x_key, shape=(self.num_agents,), dtype=jnp.float32, minval=self.xrange[0],
@@ -946,28 +960,30 @@ class OvertakeInLowSpeed(SceneBase):
         S_mobst_state = jnp.stack([mobst_x, mobst_y, mobst_vx, 0., 0., 0., 0., 0.])
         oS_obst_state = jnp.stack([S_sobst_state, S_mobst_state], axis=0)
 
-        return aS_agent_state, oS_obst_state, anS_goals
+        return aS_agent_state, oS_obst_state, anS_goals, an4_dsYddts
 
 
-class HandMadeScene(LaneChangeANDOvertakeScene):
-    """此场景用于实地测试时的场景设计，图例如下：
+class HandMadeSceneIdenticalSpeed(LaneChangeANDOvertakeScene):
+    """此场景只可适用于3车道场景，可布置1个动态障碍物，1个静态障碍物，静态障碍物放在第1/3车道，动态障碍物放在中间车道，同时动态障碍物车速较慢，
+    agent由第3/1车道向第1/3车道变道，使得agent在变道至中间车道时差不多需要避免与动态障碍物的碰撞，图例如下：
     ==================================================
-    1
-    --------------------------------------------------- // 这里是c8园区实际上的边界
-    2
-    --------------------------------------------------
-    3  ego  ■ -----  □ --slow--> ♦  static -- reference path -->
+    1                                /----♦  static obstacle--> reference path
+    ------------------------------/--------------------
+    2  □ --moving obstacle-->  /
+    ------------------------/-------------------------
+    3     ego  ■ --------/ reference path
     ==================================================
+    本场景无随机初始化过程，所有物体初始状态均固定，且为了适配无纵向控制的横向控制算法，ego初速度与目标速度保持一致
     """
 
     def __init__(self, key: PRNGKey, num_agents: int, num_ref_points:int, xrange:Array, yrange:Array, lane_width:float,
                  lane_centers:Array):
-        super(HandMadeScene, self).__init__(key, num_agents, num_ref_points, xrange, yrange,
-                                                                   lane_width, lane_centers)
+        super(HandMadeSceneIdenticalSpeed, self).__init__(key, num_agents, num_ref_points, xrange, yrange,
+                                                          lane_width, lane_centers)
 
     @property
     def name(self) -> str:
-        return 'lanechange_scene_with_edge_static_obstacle_and_middle_slow_moving_obstacle'
+        return 'handmade_lanechange_scene_with_edge_static_obstacle_and_middle_slow_moving_obstacle'
 
     @property
     def num_lanes(self) -> int:
@@ -982,40 +998,46 @@ class HandMadeScene(LaneChangeANDOvertakeScene):
     def num_static_obsts(self) -> int:
         return 1
 
-    def make(self) -> Tuple[AgentState, ObstState, PathRefs]:
+    def make(self) -> Tuple[AgentState, ObstState, PathRefs, jnp.ndarray]:
         # 生成轨迹
-        start_y = -3.
-        terminal_vx = 30.
+        start_x = jnp.array([-70.])[0]
+        terminal_x = jnp.array([80.])[0]
+        start_y = self.lane_centers[-1]
+        terminal_y = self.lane_centers[0]
+        start_vx = terminal_vx = jnp.array([60])[0]  # km/h
         Sm3_other0 = jnp.zeros((self.state_dim - 3,), dtype=jnp.float32)
-        anS_goals = generate_horizontal_path_points(self.xrange, self.num_agents, self.num_ref_points, start_y,
-                                                    terminal_vx)
+        S_start_state = jnp.concatenate([start_x[None], start_y[None], start_vx[None], Sm3_other0])
+        S_terminal_state = jnp.concatenate([terminal_x[None], terminal_y[None], terminal_vx[None], Sm3_other0])
+        anS_goals, an4_dsYddts = generate_lanechange_path_points(self.xrange, self.num_agents, self.num_ref_points,
+                                                                 S_start_state, S_terminal_state)
 
         # 生成初始agent
-        agent_x = -80.
-        a_agent_x = jnp.repeat(jnp.array([agent_x]), self.num_agents)
-        a_agent_y = jnp.repeat(jnp.array([start_y]), self.num_agents)
-        a_agent_vx = jnp.repeat(jnp.array([25.]), self.num_agents)
+        agent_x = jnp.array([-69.])[0]
+        a_agent_x = jnp.repeat(agent_x[None], self.num_agents, axis=0)  # 变道前同一x
+        a_agent_y = jnp.repeat(start_y[None], self.num_agents, axis=0)
+        a_agent_vx = jnp.repeat(start_vx[None], self.num_agents, axis=0)  # km/h
         aSm3_other0 = jnp.repeat(Sm3_other0[None, :], self.num_agents, axis=0)
         aS_agent_state = jnp.concatenate([a_agent_x[:, None], a_agent_y[:, None], a_agent_vx[:, None], aSm3_other0],
                                          axis=1)
 
         # 生成静态障碍物
-        sobst_x = -30.
-        sobst_y = -3.
+        sobst_x = terminal_x - 5
+        sobst_y = terminal_y
         sobst_theta = 0.
         S_sobst_state = jnp.stack([sobst_x, sobst_y, 0., 0., sobst_theta, 0., 0., 0.])
 
-        # 生成动态障碍物
-        mobst_y = jnp.array([-3.])
-        mobst_vx = jnp.array([2.])
-        mobst_x = jnp.array([30.])
-        S_mobst_state = jnp.concatenate([mobst_x, mobst_y, mobst_vx, Sm3_other0], axis=0)
+        # 生成动态障碍物，y坐标位于中间车道，x坐标需要计算agent恰好变道到中间车道时动态障碍物位于ego附近
+        t = ((start_x + terminal_x) / 2 - agent_x) / terminal_vx
+        mobst_y = self.lane_centers[1]
+        mobst_vx = jnp.array([30])[0] # km/h
+        mobst_x = (start_x + terminal_x) / 2 - t * mobst_vx - 5
+        S_mobst_state = jnp.concatenate([mobst_x[None], mobst_y[None], mobst_vx[None], Sm3_other0], axis=0)
         oS_obst_state = jnp.stack([S_sobst_state, S_mobst_state], axis=0)
 
-        return aS_agent_state, oS_obst_state, anS_goals
+        return aS_agent_state, oS_obst_state, anS_goals, an4_dsYddts
 
 def gen_scene_randomly(key: PRNGKey, num_agents: int, num_ref_points: int, xrange: Array, yrange: Array,
-                       lane_width: float, lane_centers: Array) -> Tuple[AgentState, ObstState, PathRefs]:
+                       lane_width: float, lane_centers: Array) -> Tuple[AgentState, ObstState, PathRefs, jnp.ndarray]:
     choose_key, scene_key = jr.split(key, 2)
     scene_list = [LaneChangeMiddleStaticEdgeFastMoving(scene_key, num_agents, num_ref_points, xrange, yrange,
                                                        lane_width, lane_centers).make,
@@ -1031,17 +1053,17 @@ def gen_scene_randomly(key: PRNGKey, num_agents: int, num_ref_points: int, xrang
                                                     lane_width, lane_centers).make]
     # scene_list = [OvertakeInLowSpeed(scene_key, num_agents, num_ref_points, xrange, yrange, lane_width, lane_centers).make]
     choose_id = jr.choice(choose_key, len(scene_list))
-    aS_agent_state, oS_obst_state, anS_goals = jax.lax.switch(choose_id, scene_list)
+    aS_agent_state, oS_obst_state, anS_goals, an4_dsYddts = jax.lax.switch(choose_id, scene_list)
 
-    return aS_agent_state, oS_obst_state, anS_goals
+    return aS_agent_state, oS_obst_state, anS_goals, an4_dsYddts
 
 
 def gen_handmade_scene_randomly(key: PRNGKey, num_agents: int, num_ref_points: int, xrange: Array, yrange: Array,
-                                lane_width: float, lane_centers: Array) -> Tuple[AgentState, ObstState, PathRefs]:
+                                lane_width: float, lane_centers: Array) -> Tuple[AgentState, ObstState, PathRefs, jnp.ndarray]:
     choose_key, scene_key = jr.split(key, 2)
-    scene_list = [HandMadeScene(scene_key, num_agents, num_ref_points, xrange, yrange,
-                                lane_width, lane_centers).make]
+    scene_list = [HandMadeSceneIdenticalSpeed(scene_key, num_agents, num_ref_points, xrange, yrange,
+                                              lane_width, lane_centers).make]
     choose_id = jr.choice(choose_key, len(scene_list))
-    aS_agent_state, oS_obst_state, anS_goals = jax.lax.switch(choose_id, scene_list)
+    aS_agent_state, oS_obst_state, anS_goals, an4_dsYddts = jax.lax.switch(choose_id, scene_list)
 
-    return aS_agent_state, oS_obst_state, anS_goals
+    return aS_agent_state, oS_obst_state, anS_goals, an4_dsYddts

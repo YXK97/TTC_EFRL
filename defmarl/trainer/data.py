@@ -1,4 +1,4 @@
-from typing import NamedTuple
+from typing import NamedTuple, Optional
 
 from ..utils.typing import Array
 from ..utils.typing import Action, Reward, Cost, Done
@@ -15,6 +15,7 @@ class Rollout(NamedTuple):
     dones: Done
     log_pis: Array
     next_graph: GraphsTuple
+    dYddts: Optional[Array]
     zs: Array = None
     z_global: Array = None
 
