@@ -75,7 +75,7 @@ class EnvNode(Node):
         # 初始化状态和步数
         np.random.seed(args.seed)
         key_0 = jr.PRNGKey(args.seed)
-        self.current_graph = self.env.reset(key_0)
+        self.current_graph, _ = self.env.reset(key_0)
         self.current_step = 0
 
 
