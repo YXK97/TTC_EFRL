@@ -11,6 +11,6 @@ export JAX_PLATFORMS=cpu
 export JAX_PLATFORM_NAME=cpu
 export CUDA_VISIBLE_DEVICES=""
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
-echo "✅ Action和Env 节点已禁用 GPU，强制使用 CPU 运行"
+echo "✅ Action 节点已禁用 GPU，强制使用 CPU 运行"
 
-ros2 launch vehicle_dynamics_sim sim_launch.py "$@"
+ros2 launch vehicle_dynamics_sim action_launch.py "$@"

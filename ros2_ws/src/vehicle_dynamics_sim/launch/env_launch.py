@@ -1,8 +1,6 @@
 from launch import LaunchDescription
 from launch_ros.actions import Node
-from launch.actions import RegisterEventHandler, TimerAction
-from launch.event_handlers import OnProcessStart, OnProcessExit
-from launch.substitutions import LaunchConfiguration, PythonExpression
+from launch.substitutions import LaunchConfiguration
 from launch.actions import DeclareLaunchArgument
 
 
@@ -42,14 +40,7 @@ def generate_launch_description():
         'debug': LaunchConfiguration('debug'),
         'area_size': LaunchConfiguration('area_size')
     }
-    # action节点独有参数（在公共参数基础上扩展）
-    action_params = {
-        **common_params,  # 继承公共参数
-        'from_iter': LaunchConfiguration('from_iter'),
-        'stochastic': LaunchConfiguration('stochastic'),
-    }
 
-    # 定义两个节点（传递对应参数）
     # env节点
     env_node = Node(
         package='vehicle_dynamics_sim',
@@ -58,37 +49,6 @@ def generate_launch_description():
         output='screen',
         parameters=[common_params]  # 传递公共参数
     )
-    # action节点
-    action_node = Node(
-        package='vehicle_dynamics_sim',
-        executable='start_action_node.py',
-        name='start_action_node',
-        output='screen',
-        parameters=[action_params]  # 传递整合后的所有参数
-    )
-
-    # 节点联动逻辑
-    start_env_after_action = RegisterEventHandler(
-        event_handler=OnProcessStart(
-            target_action=action_node,  # 目标节点改为：action_node
-            on_start=[TimerAction(period=5., actions=[env_node])]
-        )
-    )
-
-    """
-    stop_action_after_env = RegisterEventHandler(
-        event_handler=OnProcessExit(
-            target_action=env_node,
-            on_exit=[
-                Node(
-                    package='ros2cli',
-                    executable='node',
-                    arguments=['kill', '/start_action_node']
-                )
-            ]
-        )
-    )
-    """
 
     return LaunchDescription([
         # 声明命令行参数
@@ -103,8 +63,5 @@ def generate_launch_description():
         declare_area_size_arg,
         declare_from_iter_arg,
         declare_stochastic_arg,
-        # 节点与联动逻辑
-        action_node,
-        start_env_after_action,
-        #stop_action_after_env
+        env_node
     ])

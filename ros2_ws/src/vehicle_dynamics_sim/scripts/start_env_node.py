@@ -17,7 +17,7 @@ from defmarl.env import make_env
 from defmarl.env.mve import MVE, MVEEnvGraphsTuple
 from defmarl.utils.utils import parse_jax_array
 from vehicle_dynamics_sim.action import AgentControl
-from vehicle_dynamics_sim.msg import StateAndEval, SingleObjectState
+from vehicle_dynamics_sim.msg import StateActionAndEval, SingleObjectState, SingleAgentControl
 
 
 class EnvNode(Node):
@@ -25,16 +25,16 @@ class EnvNode(Node):
         super().__init__ ('start_env_node')
 
         # 必填参数（无默认值，后续在launch中强制传入）
-        self.declare_parameter('path', '')  # 核心必填参数，无默认值
+        self.declare_parameter('path')  # 核心必填参数，无默认值
         # 可选参数（与原argparse默认值一致）
-        self.declare_parameter('num_agents', None)
-        self.declare_parameter('env', None)
+        self.declare_parameter('num_agents')
+        self.declare_parameter('env')
         self.declare_parameter('full_observation', False)  # ROS2参数名不支持连字符，用下划线
         self.declare_parameter('cpu', False)
-        self.declare_parameter('max_step', None)
+        self.declare_parameter('max_step')
         self.declare_parameter('seed', 1234)
         self.declare_parameter('debug', False)
-        self.declare_parameter('area_size', '')  # jax数组先传字符串，再内部解析
+        self.declare_parameter('area_size')  # jax数组先传字符串，再内部解析
 
         # 取所有参数（封装为类似原args的对象，方便后续调用
         self.args = self.get_all_parameters()
@@ -46,8 +46,8 @@ class EnvNode(Node):
             raise SystemExit('Missing required parameter: path')
 
         n_gpu = jax.local_device_count()
-        print(f"> initializing EnvNode {self.args}")
-        print(f"> Using {n_gpu} devices")
+        self.get_logger().info(f"> initializing EnvNode ...")
+        self.get_logger().info(f"> Using {n_gpu} devices")
 
         # set up environment variables and seed
         os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
@@ -82,15 +82,17 @@ class EnvNode(Node):
 
         # ros通信
         # 状态量发布到 /ros_env/vehicle_state
-        self.state_pub = self.create_publisher(StateAndEval, '/ros_env', 0)
+        self.state_pub = self.create_publisher(StateActionAndEval, '/ros_env', 10)
         # 创建Action客户端（向ros_action节点请求控制量）
         self.control_client = ActionClient(self, AgentControl, '/ros_action')
-        # 定时器（40Hz执行step）
+        # 定时器
         self.timer = self.create_timer(self.env.dt, self.step_callback)
-
+        self.control_result = None  # 缓存 Action 响应结果
+        self.control_received = False  # 标记是否收到 Action 响应
+        self.default_action = np.zeros((self.env.num_agents, 2))  # 提前初始化默认控制
         # 运行标记
         self.is_running = True
-        self.get_logger().info('Env node initialized, max step: %d, freq: %dHz' % (self.env.max_step, 1/self.env.dt))
+        self.get_logger().info('Env node initialized, max step: %d, freq: %dHz' % (self.env.max_episode_steps, 1/self.env.dt))
 
 
     def get_all_parameters(self):
@@ -127,8 +129,7 @@ class EnvNode(Node):
 
 
     def step_callback(self):
-        """核心step逻辑：40Hz执行"""
-        if not self.is_running or self.current_step >= self.env.max_step:
+        if not self.is_running or self.current_step >= self.env.max_episode_steps:
             self.terminate_sim()
             return
 
@@ -136,62 +137,97 @@ class EnvNode(Node):
         # 获取控制量
         ad_action = self.get_control_cmd()  # [acc, delta]
         # 执行动力学step
-        next_graph, reward, a_cost, a_cost_real, done, info = self.env.step(self.current_graph, ad_action)
-        cost = a_cost.max
-        cost_real = a_cost_real.max
+        next_graph, dsYddts, reward, a_cost, a_cost_real, done, info = self.env.step(self.current_graph, ad_action)
+        reward = float(reward)
+        cost = float(np.max(a_cost))
+        cost_real = float(np.max(a_cost_real))
 
         # 发布当前时刻环境状态量、控制量、评估量并更新
-        self.publish_state(self.current_graph, reward, cost, cost_real)
+        self.publish_state(self.current_graph, reward, cost, cost_real, ad_action)
 
         # 同步现实时间：补足时延
         step_elapsed = time.time() - step_start
         if step_elapsed < self.env.dt:
             time.sleep(self.env.dt - step_elapsed)
+        #debug
+        #time.sleep(2)
 
         # 更新状态
         self.current_step += 1
+        self.get_logger().info(f'Current simulation step: {self.current_step}/{self.env.max_episode_steps}')
         self.current_graph = next_graph
         if self.current_step % 10 == 0:  # 每10步打印日志
-            self.get_logger().debug(f'Step {self.current_step}/{self.env.max_step}, reward: {reward:.2f}, cost: {cost:.2f}')
+            self.get_logger().debug(f'Step {self.current_step}/{self.env.max_episode_steps}, reward: {reward:.2f}, cost: {cost:.2f}')
+
+
+    def goal_response_callback(self, future):
+        """Action Goal 响应回调（异步，无阻塞）"""
+        try:
+            goal_handle = future.result()
+            if not goal_handle.accepted:
+                self.get_logger().warn('Action goal rejected by server, use default control [0,0]')
+                return
+
+            # Goal 被接受，异步获取结果，注册结果回调
+            result_future = goal_handle.get_result_async()
+            result_future.add_done_callback(self.result_callback)
+
+        except Exception as e:
+            self.get_logger().warn(f'Failed to get goal response: {e}, use default [0,0]')
+
+
+    def result_callback(self, future):
+        """Action 结果回调（异步，无阻塞，缓存有效控制量）"""
+        try:
+            result = future.result().result
+            self.control_received = True
+            self.control_result = result
+
+            if result.success:
+                ad_action_list = [[single_action.ax, single_action.delta] for single_action in result.ad_action]
+                ad_action = jnp.array(ad_action_list, dtype=jnp.float32)
+                # 验证控制量形状，缓存有效结果（后续 step 可直接使用）
+                if ad_action.shape == (self.env.num_agents, 2):  # 直接指定 action_dim=2，避免依赖 result.action_dim
+                    self.control_result = ad_action
+                    self.get_logger().debug(f'Success get multi-agent control (shape: {ad_action.shape}): {ad_action}')
+                else:
+                    self.get_logger().warn(
+                        f'Control shape mismatch: {ad_action.shape} vs ({self.env.num_agents},2), use default [0,0]')
+                    self.control_result = self.default_action
+            else:
+                self.get_logger().warn(f'Action result invalid (success={result.success}), use default [0,0]')
+                self.control_result = self.default_action
+
+        except Exception as e:
+            self.get_logger().warn(f'Failed to get action result: {e}, use default [0,0]')
+            self.control_result = self.default_action
 
 
     def get_control_cmd(self):
         """向action节点请求控制量，默认[0,0]"""
-        default_action = jnp.zeros((self.env.num_agents, 2))
+        # 重置回调标记和结果
+        self.control_received = False
+        self.control_result = None
         try:
             # 等待action服务器上线
-            if not self.control_client.wait_for_server(timeout_sec=0.1):
+            if not self.control_client.wait_for_server(timeout_sec=1.):
                 self.get_logger().warn('Action server not found, use default control [0,0]')
-                return default_action
-            # 构造空Goal从而仅触发请求，无参数
+                return self.default_action
+            # 构造空Goal，异步发送（无阻塞，通过回调处理结果）
             goal_msg = AgentControl.Goal()
             future = self.control_client.send_goal_async(goal_msg)
-            rclpy.spin_until_future_complete(self, future)
-            goal_handle = future.result()
-            if not goal_handle.accepted:
-                self.get_logger().warn('Action goal rejected by server, use default control [0,0]')
-                return default_action
-            # 获取结果
-            result_future = goal_handle.get_result_async()
-            rclpy.spin_until_future_complete(self, result_future)
-            result = result_future.result().result
-            if result.success:
-                ad_action_list = [[single_action.ax, single_action.delta] for single_action in result.ad_action]
-                ad_action = jnp.array(ad_action_list, dtype=jnp.float32)
-                assert ad_action.shape == (self.env.num_agents, result.action_dim), \
-                    self.get_logger().warn(f'Control shape mismatch: {ad_action.shape} vs ({self.env.num_agents},{result.action_dim})')
-                self.get_logger().debug(
-                    f'Success get multi-agent control (shape: {ad_action.shape}): {ad_action}')
-                return ad_action
-            else:
-                self.get_logger().warn(
-                    f'Action result invalid (success={result.success}, dim={result.action_dim}), use default [0,0]')
-                return default_action
+            # 注册 Goal 响应回调（不阻塞，执行器空闲时自动处理）
+            future.add_done_callback(self.goal_response_callback)
+            # 此处不等待结果，直接返回默认值（后续通过回调更新有效控制，或沿用默认值）
+            # 避免同步阻塞，破除死锁
+            return self.default_action
+
         except Exception as e:
             self.get_logger().warn(f'Failed to get control cmd: {e}, use default [0,0]')
-            return default_action
+            return self.default_action
 
-    def publish_state(self, graph: MVEEnvGraphsTuple, reward: float, cost: float, cost_real: float):
+
+    def publish_state(self, graph: MVEEnvGraphsTuple, reward: float, cost: float, cost_real: float, ad_action: np.ndarray):
         """发布自车+障碍车状态到/ros_env"""
         aS_agent_states = graph.type_states(type_idx=MVE.AGENT, n_type=self.env.num_agents)
         aS_goal_states = graph.type_states(type_idx=MVE.GOAL, n_type=self.env.num_agents)
@@ -199,25 +235,36 @@ class EnvNode(Node):
         agent_states_np = np.asarray(aS_agent_states)
         goal_states_np = np.asarray(aS_goal_states)
         obst_states_np = np.asarray(oS_obst_states)
-        msg = StateAndEval()
+        ad_actions_np = np.asarray(ad_action)
+        msg = StateActionAndEval()
 
         def _array_to_single_state(state_arr: np.ndarray) -> SingleObjectState:
             """将单个物体的状态数组（长度8）转为SingleObjectState msg"""
             single_state = SingleObjectState()
-            single_state.x = state_arr[0]
-            single_state.y = state_arr[1]
-            single_state.vx = state_arr[2]
-            single_state.vy = state_arr[3]
-            single_state.theta = state_arr[4]
-            single_state.dthetadt = state_arr[5]
-            single_state.bw = state_arr[6]
-            single_state.bh = state_arr[7]
+            single_state.x = float(state_arr[0])
+            single_state.y = float(state_arr[1])
+            single_state.vx = float(state_arr[2])
+            single_state.vy = float(state_arr[3])
+            single_state.theta = float(state_arr[4])
+            single_state.dthetadt = float(state_arr[5])
+            single_state.bw = float(state_arr[6])
+            single_state.bh = float(state_arr[7])
             return single_state
 
-        msg.aS_agent_states = [_array_to_single_state(state) for state in agent_states_np]
-        msg.aS_goal_states = [_array_to_single_state(state) for state in goal_states_np]
-        msg.oS_obst_states = [_array_to_single_state(state) for state in obst_states_np]
+        msg.as_agent_states = [_array_to_single_state(state) for state in agent_states_np]
+        msg.as_goal_states = [_array_to_single_state(state) for state in goal_states_np]
+        msg.os_obst_states = [_array_to_single_state(state) for state in obst_states_np]
         msg.state_dim = 8
+
+        def _array_to_single_control(action_arr) -> SingleAgentControl:
+            """将单个agent的动作数组（长度2）转为SingleAgentControl msg"""
+            single_control = SingleAgentControl()
+            single_control.ax = float(action_arr[0])
+            single_control.delta = float(action_arr[1])
+            return single_control
+
+        msg.ad_action = [_array_to_single_control(d_action) for d_action in ad_actions_np]
+        msg.action_dim = 2
 
         msg.reward = reward
         msg.cost = cost
@@ -227,11 +274,11 @@ class EnvNode(Node):
 
 
     def terminate_sim(self):
-        """终止仿真，发布终止信号（全0状态）"""
+        """终止仿真，发布终止信号"""
         self.is_running = False
         self.timer.cancel()
         # 发布终止信号（供action节点感知）
-        terminate_state = StateAndEval()
+        terminate_state = StateActionAndEval()
         self.state_pub.publish(terminate_state)
         self.get_logger().info(f'Simulation finished! Total steps: {self.current_step}')
         rclpy.shutdown()
@@ -240,13 +287,11 @@ class EnvNode(Node):
 def main():
     rclpy.init()
     env_node = EnvNode()
-    executor = SingleThreadedExecutor()
-    executor.add_node(env_node)
     try:
-        executor.spin()
+        rclpy.spin(env_node)
     finally:
         env_node.destroy_node()
-        executor.shutdown()
+        rclpy.shutdown()
 
 
 if __name__ == '__main__':

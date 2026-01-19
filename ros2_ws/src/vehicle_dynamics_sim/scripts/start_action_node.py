@@ -16,7 +16,7 @@ from defmarl.algo import make_algo
 from defmarl.env import make_env
 from defmarl.env.mve import MVEEnvState
 from defmarl.utils.utils import parse_jax_array
-from vehicle_dynamics_sim.msg import StateAndEval, SingleAgentControl
+from vehicle_dynamics_sim.msg import StateActionAndEval, SingleAgentControl
 from vehicle_dynamics_sim.action import AgentControl
 
 
@@ -26,18 +26,18 @@ class ActionNode(Node):
 
         # 声明所有参数（整合env参数+自身独有参数)
         # 公共必填参数
-        self.declare_parameter('path', '')
+        self.declare_parameter('path')
         # 公共可选参数（与env节点一致）
-        self.declare_parameter('num_agents', None)
-        self.declare_parameter('env', None)
+        self.declare_parameter('num_agents')
+        self.declare_parameter('env')
         self.declare_parameter('full_observation', False)
         self.declare_parameter('cpu', False)
-        self.declare_parameter('max_step', None)
+        self.declare_parameter('max_step')
         self.declare_parameter('seed', 1234)
         self.declare_parameter('debug', False)
-        self.declare_parameter('area_size', '')
+        self.declare_parameter('area_size')
         # 自身独有可选参数
-        self.declare_parameter('from_iter', None)
+        self.declare_parameter('from_iter')
         self.declare_parameter('stochastic', False)
 
         # 获取所有参数（封装为对象）
@@ -51,8 +51,8 @@ class ActionNode(Node):
 
 
         n_gpu = jax.local_device_count()
-        print(f"> initializing ActionNode {self.args}")
-        print(f"> Using {n_gpu} devices")
+        self.get_logger().info(f"> initializing ActionNode ...")
+        self.get_logger().info(f"> Using {n_gpu} devices")
 
         # set up environment variables and seed
         os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
@@ -65,7 +65,9 @@ class ActionNode(Node):
 
         # load config
         if self.args.path is not None:
-            with open(os.path.join(self.args.path, "config.yaml"), "r") as f:
+            config_path = os.path.join(self.args.path, "config.yaml")
+            with open(config_path, "r") as f:
+                self.get_logger().info(f"> loading config in {config_path}")
                 config = yaml.load(f, Loader=yaml.UnsafeLoader)
 
         # 加载神经网络模型
@@ -76,7 +78,7 @@ class ActionNode(Node):
             from_iter = max([int(model) for model in models if model.isdigit()])
         else:
             from_iter = self.args.from_iter
-        print("from_iter: ", from_iter)
+        self.get_logger().info(f"> from_iter {from_iter}")
 
         # create environments
         num_agents = config.num_agents if self.args.num_agents is None else self.args.num_agents
@@ -138,7 +140,7 @@ class ActionNode(Node):
 
 
         # 订阅状态量
-        self.state_sub = self.create_subscription(StateAndEval, '/ros_env', self.state_callback,0)
+        self.state_sub = self.create_subscription(StateActionAndEval, '/ros_env', self.state_callback,10)
 
         # 创建Action服务器（响应控制量请求）
         self.control_server = ActionServer(self, AgentControl, '/ros_action', self.control_callback)
@@ -185,27 +187,30 @@ class ActionNode(Node):
         return args
 
 
-    def state_callback(self, msg:StateAndEval):
+    def state_callback(self, msg:StateActionAndEval):
         """订阅状态量，缓存最新状态；检测终止信号"""
+        if not msg.as_agent_states or not msg.as_goal_states:
+            self.is_running = False
+            self.get_logger().info('Received empty state message, stopping action node...')
+            self.control_server.destroy()
+            self.state_sub.destroy()
+            rclpy.shutdown()
+            return
+
         # 缓存状态
         aS_agent_states_list = [[single_state.x, single_state.y, single_state.vx, single_state.vy, single_state.theta, \
-            single_state.dthetadt, single_state.bw, single_state.bh] for single_state in msg.aS_agent_states]
+            single_state.dthetadt, single_state.bw, single_state.bh] for single_state in msg.as_agent_states]
         aS_goal_states_list = [[single_state.x, single_state.y, single_state.vx, single_state.vy, single_state.theta, \
-            single_state.dthetadt, single_state.bw, single_state.bh] for single_state in msg.aS_goal_states]
+            single_state.dthetadt, single_state.bw, single_state.bh] for single_state in msg.as_goal_states]
         oS_obst_states_list = [[single_state.x, single_state.y, single_state.vx, single_state.vy, single_state.theta, \
-            single_state.dthetadt, single_state.bw, single_state.bh] for single_state in msg.oS_obst_states]
+            single_state.dthetadt, single_state.bw, single_state.bh] for single_state in msg.os_obst_states]
         aS_agent_states = jnp.array(aS_agent_states_list, dtype=jnp.float32)
         aS_goal_states = jnp.array(aS_goal_states_list, dtype=jnp.float32)
         oS_obst_states = jnp.array(oS_obst_states_list, dtype=jnp.float32)
 
         env_state = MVEEnvState(aS_agent_states, aS_goal_states, oS_obst_states)
         self.latest_graph = self.env.get_graph(env_state)
-
-        # 检测终止信号（状态全0）
-        if all(aS_agent_states == 0) and all(aS_goal_states == 0) and all(oS_obst_states == 0):
-            self.is_running = False
-            self.get_logger().info('Received terminate signal, stopping action node...')
-            rclpy.shutdown()
+        self.get_logger().info(f'Received valid state: agents={aS_agent_states.shape}, goals={aS_goal_states.shape}')
 
 
     def control_callback(self, goal_handle):
@@ -241,15 +246,15 @@ class ActionNode(Node):
         # 构造响应
         result = AgentControl.Result()
 
-        def _array_to_single_action(a_action: np.ndarray) -> SingleAgentControl:
+        def _array_to_single_action(d_action: np.ndarray) -> SingleAgentControl:
             """将单个物体的动作数组（长度8）转为SingleAgentControl action"""
             single_action = SingleAgentControl()
-            single_action.ax = a_action[0]
-            single_action.delta = a_action[1]
+            single_action.ax = float(d_action[0])
+            single_action.delta = float(d_action[1])
             return single_action
 
         ad_action_np = np.asarray(action)
-        result.ad_action = [_array_to_single_action(a_action_np) for a_action_np in ad_action_np]
+        result.ad_action = [_array_to_single_action(d_action_np) for d_action_np in ad_action_np]
         result.success = True
         result.message = f'Control: acc={ad_action_np[:,0]}, delta={ad_action_np[:,1]}'
         goal_handle.succeed()

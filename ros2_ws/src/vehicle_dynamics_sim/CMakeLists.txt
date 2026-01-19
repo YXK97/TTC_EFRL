@@ -16,7 +16,7 @@ find_package(rclpy REQUIRED)
 
 set(msg_files
   "msg/SingleObjectState.msg"
-  "msg/StateAndEval.msg"
+  "msg/StateActionAndEval.msg"
   "msg/SingleAgentControl.msg"
 )
 
