@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import argparse
 import os
 os.environ["CUDA_VISIBLE_DEVICES"] = "0" # 由于是测试，没有进行数据并行的必要，强制使用第0个GPU
@@ -15,12 +16,12 @@ from defmarl.algo import make_algo
 from defmarl.env import make_env
 from defmarl.env.mve import MVEEnvState
 from defmarl.utils.utils import parse_jax_array
-from vehicle_dynamics_sim.msg import StateAndEval
-from vehicle_dynamics_sim.action import AgentControl, SingleAgentControl
+from vehicle_dynamics_sim.msg import StateAndEval, SingleAgentControl
+from vehicle_dynamics_sim.action import AgentControl
 
 
 class ActionNode(Node):
-    def __init__(self, args):
+    def __init__(self):
         super().__init__('start_action_node')
 
         # 声明所有参数（整合env参数+自身独有参数)
@@ -50,42 +51,42 @@ class ActionNode(Node):
 
 
         n_gpu = jax.local_device_count()
-        print(f"> initializing ActionNode {args}")
+        print(f"> initializing ActionNode {self.args}")
         print(f"> Using {n_gpu} devices")
 
         # set up environment variables and seed
         os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
-        if args.cpu:
+        if self.args.cpu:
             os.environ["JAX_PLATFORM_NAME"] = "cpu"
-        if args.debug:
+        if self.args.debug:
             jax.config.update("jax_disable_jit", True)
-        np.random.seed(args.seed)
-        self.key = jr.PRNGKey(args.seed)
+        np.random.seed(self.args.seed)
+        self.key = jr.PRNGKey(self.args.seed)
 
         # load config
-        if args.path is not None:
-            with open(os.path.join(args.path, "config.yaml"), "r") as f:
+        if self.args.path is not None:
+            with open(os.path.join(self.args.path, "config.yaml"), "r") as f:
                 config = yaml.load(f, Loader=yaml.UnsafeLoader)
 
         # 加载神经网络模型
-        path = args.path
+        path = self.args.path
         model_path = os.path.join(path, "models")
-        if args.from_iter is None:
+        if self.args.from_iter is None:
             models = os.listdir(model_path)
             from_iter = max([int(model) for model in models if model.isdigit()])
         else:
-            from_iter = args.from_iter
+            from_iter = self.args.from_iter
         print("from_iter: ", from_iter)
 
         # create environments
-        num_agents = config.num_agents if args.num_agents is None else args.num_agents
+        num_agents = config.num_agents if self.args.num_agents is None else self.args.num_agents
         env = make_env(
-            env_id=config.env if args.env is None else args.env,
+            env_id=config.env if self.args.env is None else self.args.env,
             num_agents=num_agents,
             num_obs=config.obs,
-            max_step=args.max_step,
-            full_observation=args.full_observation,
-            area_size=config.area_size if args.area_size is None else args.area_size,
+            max_step=self.args.max_step,
+            full_observation=self.args.full_observation,
+            area_size=config.area_size if self.args.area_size is None else self.args.area_size,
         ) # 和EnvNode一样的环境，相当于算法自己的环境备份
         self.env = env
 
@@ -111,9 +112,9 @@ class ActionNode(Node):
         )
         algo.load(model_path, from_iter)
         self.algo = algo
-        self.stochastic = args.stochastic
+        self.stochastic = self.args.stochastic
 
-        if args.stochastic:
+        if self.args.stochastic:
             def act_fn(x, z, rnn_state, key):
                 action, _, new_rnn_state = algo.step(x, z, rnn_state, key)
                 return action, new_rnn_state

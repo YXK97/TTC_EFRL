@@ -83,7 +83,7 @@ dependencies:
       - dm-tree
       - docutils
       - einops
-      - empy
+      - empy==3.3.2
       - equinox
       - etils
       - eval-type-backport

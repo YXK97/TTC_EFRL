@@ -53,7 +53,7 @@ def generate_launch_description():
     # env节点
     env_node = Node(
         package='vehicle_dynamics_sim',
-        executable='start_env_node',
+        executable='start_env_node.py',
         name='start_env_node',
         output='screen',
         parameters=[common_params]  # 传递公共参数
@@ -61,7 +61,7 @@ def generate_launch_description():
     # action节点
     action_node = Node(
         package='vehicle_dynamics_sim',
-        executable='start_action_node',
+        executable='start_action_node.py',
         name='start_action_node',
         output='screen',
         parameters=[action_params]  # 传递整合后的所有参数

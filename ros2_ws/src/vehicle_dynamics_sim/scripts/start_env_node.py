@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import os
 os.environ["CUDA_VISIBLE_DEVICES"] = "0" # 由于是测试，没有进行数据并行的必要，强制使用第0个GPU
 import rclpy
@@ -36,45 +37,45 @@ class EnvNode(Node):
         self.declare_parameter('area_size', '')  # jax数组先传字符串，再内部解析
 
         # 取所有参数（封装为类似原args的对象，方便后续调用
-        args = self.get_all_parameters()
+        self.args = self.get_all_parameters()
 
         # 校验必填参数（path不能为空）
-        if not args.path:
+        if not self.args.path:
             self.get_logger().fatal('Parameter "path" is required! Please set it in launch file.')
             rclpy.shutdown()
             raise SystemExit('Missing required parameter: path')
 
         n_gpu = jax.local_device_count()
-        print(f"> initializing EnvNode {args}")
+        print(f"> initializing EnvNode {self.args}")
         print(f"> Using {n_gpu} devices")
 
         # set up environment variables and seed
         os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
-        if args.cpu:
+        if self.args.cpu:
             os.environ["JAX_PLATFORM_NAME"] = "cpu"
-        if args.debug:
+        if self.args.debug:
             jax.config.update("jax_disable_jit", True)
 
         # load config
-        if args.path is not None:
-            with open(os.path.join(args.path, "config.yaml"), "r") as f:
+        if self.args.path is not None:
+            with open(os.path.join(self.args.path, "config.yaml"), "r") as f:
                 config = yaml.load(f, Loader=yaml.UnsafeLoader)
 
         # create environments
-        num_agents = config.num_agents if args.num_agents is None else args.num_agents
+        num_agents = config.num_agents if self.args.num_agents is None else self.args.num_agents
         env = make_env(
-            env_id=config.env if args.env is None else args.env,
+            env_id=config.env if self.args.env is None else self.args.env,
             num_agents=num_agents,
             num_obs=config.obs,
-            max_step=args.max_step,
-            full_observation=args.full_observation,
-            area_size=config.area_size if args.area_size is None else args.area_size,
+            max_step=self.args.max_step,
+            full_observation=self.args.full_observation,
+            area_size=config.area_size if self.args.area_size is None else self.args.area_size,
         )
         self.env = env
 
         # 初始化状态和步数
-        np.random.seed(args.seed)
-        key_0 = jr.PRNGKey(args.seed)
+        np.random.seed(self.args.seed)
+        key_0 = jr.PRNGKey(self.args.seed)
         self.current_graph, _ = self.env.reset(key_0)
         self.current_step = 0
 
