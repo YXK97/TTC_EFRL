@@ -134,7 +134,7 @@ def eval_rollout(
         graph, actor_rnn_state, Vh_rnn_state = data
         if z_fn is not None:
             z, Vh_rnn_state = z_fn(graph, Vh_rnn_state)
-            z_max = np.max(z, axis=0)
+            z_max = jnp.max(z, axis=0)
             z = jnp.repeat(z_max[None], env.num_agents, axis=0)
         else:
             z = z0
