@@ -51,9 +51,9 @@ def eval_rollout_uftstc(
 
         # debug
         zeros = jnp.zeros_like(a_ax)
-        action = jnp.stack([a_ax, zeros], axis=1)
+        #action = jnp.stack([a_ax, zeros], axis=1)
 
-        #action = jnp.stack([a_ax, a_deltaf], axis=1)
+        action = jnp.stack([a_ax, a_deltaf], axis=1)
         next_graph, next_dsYddt, reward, cost, cost_real, done, info = env.step(graph, action)
         return ((next_graph, next_dsYddt),
                 (graph, action, None, reward, cost, cost_real, done, None, next_graph, dsYddt))

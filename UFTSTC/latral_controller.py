@@ -194,7 +194,7 @@ class UFTSTCController:
     @ft.partial(jax.jit, static_argnums=(0,))
     def clip_deltaf(self, a_deltaf:jnp.ndarray) -> jnp.ndarray:
         """处理的单位为deg"""
-        a_clipped_deltaf = jnp.clip(a_deltaf, self.max_deltaf, self.min_deltaf)
+        a_clipped_deltaf = jnp.clip(a_deltaf, self.min_deltaf, self.max_deltaf)
         return a_clipped_deltaf
 
 

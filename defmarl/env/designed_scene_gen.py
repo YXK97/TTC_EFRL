@@ -5,8 +5,8 @@ import jax.random as jr
 from abc import ABC, abstractmethod, abstractproperty
 from typing import Tuple
 
-from ..utils.typing import PRNGKey, State, AgentState, ObstState, Array, PathRefs
-from ..utils.utils import calc_linear_eff, calc_quintic_eff, const_f, linear_f, quintic_polynomial_f, three_sec_f
+from defmarl.utils.typing import PRNGKey, State, AgentState, ObstState, Array, PathRefs
+from defmarl.utils.utils import calc_linear_eff, calc_quintic_eff, const_f, linear_f, quintic_polynomial_f, three_sec_f
 
 def generate_lanechange_path_points(xrange: Array,
                                     num_agents: int,
@@ -1004,7 +1004,8 @@ class HandMadeSceneIdenticalSpeed(LaneChangeANDOvertakeScene):
         terminal_x = jnp.array([80.])[0]
         start_y = self.lane_centers[-1]
         terminal_y = self.lane_centers[0]
-        start_vx = terminal_vx = jnp.array([60])[0]  # km/h
+        start_vx = terminal_vx = jnp.array([55])[0]  # km/h
+        init_vx = jnp.array([55])[0]  # km/h
         Sm3_other0 = jnp.zeros((self.state_dim - 3,), dtype=jnp.float32)
         S_start_state = jnp.concatenate([start_x[None], start_y[None], start_vx[None], Sm3_other0])
         S_terminal_state = jnp.concatenate([terminal_x[None], terminal_y[None], terminal_vx[None], Sm3_other0])
@@ -1015,7 +1016,7 @@ class HandMadeSceneIdenticalSpeed(LaneChangeANDOvertakeScene):
         agent_x = jnp.array([-69.])[0]
         a_agent_x = jnp.repeat(agent_x[None], self.num_agents, axis=0)  # 变道前同一x
         a_agent_y = jnp.repeat(start_y[None], self.num_agents, axis=0)
-        a_agent_vx = jnp.repeat(start_vx[None], self.num_agents, axis=0)  # km/h
+        a_agent_vx = jnp.repeat(init_vx[None], self.num_agents, axis=0)  # km/h
         aSm3_other0 = jnp.repeat(Sm3_other0[None, :], self.num_agents, axis=0)
         aS_agent_state = jnp.concatenate([a_agent_x[:, None], a_agent_y[:, None], a_agent_vx[:, None], aSm3_other0],
                                          axis=1)

@@ -95,7 +95,8 @@ class PIDController:
     def normalize_ax(self, ax:jnp.ndarray) -> jnp.ndarray:
         """处理单位为m/s^2"""
         ax_center = self.max_ax + self.min_ax
-        ax_half = self.max_ax - ax_center
+        #ax_half = self.max_ax - ax_center
+        ax_half = self.max_ax - self.min_ax
         a_normalized_ax = (ax - ax_center) / ax_half
         return a_normalized_ax
 
@@ -105,6 +106,6 @@ class PIDController:
         a_vx_error = self.vx_error_in_body_fixed_coordinates(graph) # km/h
         a_ax = self.pid_acceleration(a_vx_error)
         a_ax_clip = self.clip_ax(a_ax) # m/s^2
+        #a_ax_clip = jnp.zeros_like(a_ax_clip)
         a_ax_normalize = self.normalize_ax(a_ax_clip)
-
         return a_ax_normalize

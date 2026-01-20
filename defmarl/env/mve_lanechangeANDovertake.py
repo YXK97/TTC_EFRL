@@ -16,11 +16,11 @@ from matplotlib.patches import FancyArrow
 from .mve import MVE, MVEEnvState, MVEEnvGraphsTuple
 from .designed_scene_gen import gen_scene_randomly, gen_handmade_scene_randomly
 from .utils import process_lane_centers, process_lane_marks, relative_state
-from ..trainer.data import Rollout
-from ..utils.graph import EdgeBlock, GetGraph, GraphsTuple
-from ..utils.typing import Action, Reward, Cost, Array, State, AgentState, ObstState, Done, Info
-from ..utils.utils import tree_index, MutablePatchCollection, save_anim, calc_2d_rot_matrix, find_closest_goal_indices, \
-    gen_i_j_pairs, gen_i_j_pairs_no_identical, normalize_angle
+from defmarl.trainer.data import Rollout
+from defmarl.utils.graph import EdgeBlock, GetGraph, GraphsTuple
+from defmarl.utils.typing import Action, Reward, Cost, Array, State, AgentState, ObstState, Done, Info
+from defmarl.utils.utils import tree_index, MutablePatchCollection, save_anim, calc_2d_rot_matrix, \
+    find_closest_goal_indices, gen_i_j_pairs, gen_i_j_pairs_no_identical, normalize_angle
 from ..utils.scaling import scaling_calc, scaling_calc_bound
 
 INF = jnp.inf
@@ -130,7 +130,7 @@ class MVELaneChangeAndOverTake(MVE):
         xrange = self.params["default_state_range"][:2]
         yrange = self.params["default_state_range"][2:4]
         lanewidth = self.params["lane_width"]
-        agents, obsts, all_goals, all_dsYddts = gen_scene_randomly(key, self.num_agents, self.num_goals, xrange,
+        agents, obsts, all_goals, all_dsYddts = gen_handmade_scene_randomly(key, self.num_agents, self.num_goals, xrange,
                                                                    yrange, lanewidth, c_ycs)
         self.all_goals = all_goals
         self.all_dsYddts = all_dsYddts
@@ -211,6 +211,25 @@ class MVELaneChangeAndOverTake(MVE):
         aS_S_new = self.clip_state(aS_S_new_unclip)
 
         return aS_S_new
+    def global_speed_trans(self,aS_agent_states):
+        assert aS_agent_states.shape == (self.num_agents, self.state_dim)
+        vx_w_kmh = aS_agent_states[:, 2]
+        vy_w_kmh = aS_agent_states[:, 3]
+        theta_deg = aS_agent_states[:, 4]
+        a22_Q = jax.vmap(calc_2d_rot_matrix, in_axes=(0,))(theta_deg)
+        v_w = jnp.stack([vx_w_kmh, vy_w_kmh], axis=1)  # (A,2)
+        def construct_transform_matrix(a22_Q):
+                """从 (a, 2, 2) 的旋转矩阵 Q 构造 (a, 6, 6) 的分块矩阵。"""
+                a = a22_Q.shape[0]
+                a66_barQ = jnp.zeros((a, 6, 6))
+                a66_barQ = a66_barQ.at[:, :2, :2].set(a22_Q)
+                a66_barQ = a66_barQ.at[:, 2:4, 2:4].set(a22_Q)
+                two2_I = jnp.eye(2)
+                a66_barQ = a66_barQ.at[:, 4:6, 4:6].set(jnp.tile(two2_I, (a, 1, 1)))
+                return a66_barQ
+        ass_barQ = construct_transform_matrix(a22_Q)
+        v_b = jnp.einsum("aij,aj->ai", ass_barQ, v_w)  # (A,2)
+        return v_b
 
     def obst_step_euler(self, o_obst_states: ObstState) -> ObstState:
         """障碍车作匀速直线运动"""
@@ -257,8 +276,7 @@ class MVELaneChangeAndOverTake(MVE):
         # calculate reward and cost
         reward = self.get_reward(graph, action)
         cost, cost_real = self.get_cost(graph)
-
-        """
+        '''
         # debug
         jax.debug.print("============================= \n"
                         "old_states: \n"
@@ -272,7 +290,8 @@ class MVELaneChangeAndOverTake(MVE):
                         "agent={new_agent_states} \n"
                         "goal={new_goal_states} \n"
                         "obstacle={new_obstacle_states} \n"
-                        "============================= \n",
+                        "============================= \n"
+                        ,
                         old_agent_states = agent_states,
                         old_goal_states = goal_states,
                         old_obstacle_states = obst_states,
@@ -280,7 +299,7 @@ class MVELaneChangeAndOverTake(MVE):
                         new_agent_states = next_agent_states,
                         new_goal_states = next_goal_states,
                         new_obstacle_states = next_obst_states)
-        """
+        '''
 
 
         return self.get_graph(next_env_state), next_dsYddts, reward, cost, cost_real, done, info
@@ -783,3 +802,60 @@ class MVELaneChangeAndOverTake(MVE):
     def unsafe_mask(self, graph: GraphsTuple) -> Array:
         _, cost_real = self.get_cost(graph)
         return jnp.any(cost_real >= 0.0, axis=-1)
+
+    def plot_agent_speed_from_rollout(self, rollout: Rollout, save_path=None, use_body_frame=False):
+        """
+        绘制 agent 速度图
+        :param rollout: 一个包含图数据的 Rollout 对象
+        :param save_path: 如果传入路径，就保存为 png 文件，否则直接显示
+        :param use_body_frame: 是否使用车身坐标系进行速度转换
+        """
+        T = len(rollout.graph.n_node)  # 时间步数
+        A = self.num_agents  # 从类的实例获取 agent 数量
+        vx_TA = np.zeros((T, A), dtype=np.float32)
+        vy_TA = np.zeros((T, A), dtype=np.float32)
+
+        # 遍历所有时间步，提取速度信息
+        for t in range(T):
+            g = tree_index(rollout.graph, t)
+            vx = np.array(g.states[:A, 2])
+            vy = np.array(g.states[:A, 3])
+            if use_body_frame:
+                # 转换到车身坐标系
+                theta_deg = np.array(g.states[:A, 4])
+                theta = theta_deg * np.pi / 180.0
+                c, s = np.cos(theta), np.sin(theta)
+                vbx = c * vx + s * vy
+                vby = -s * vx + c * vy
+                vx, vy = vbx, vby
+            vx_TA[t] = vx
+            vy_TA[t] = vy
+
+        # 计算总速度
+        speed_TA = np.sqrt(vx_TA**2 + vy_TA**2)  # km/h
+        time = np.arange(T) * float(self.dt)  # 转换为时间秒
+
+        # 绘制图形
+        fig, axes = plt.subplots(3, 1, figsize=(10, 8), sharex=True)
+        for a in range(A):
+            axes[0].plot(time, vx_TA[:, a], label=f"agent{a}")
+        axes[0].set_ylabel("vx (km/h)")
+        axes[0].legend(ncol=4, fontsize=8)
+        for a in range(A):
+            axes[1].plot(time, vy_TA[:, a], label=f"agent{a}")
+        axes[1].set_ylabel("vy (km/h)")
+        for a in range(A):
+            axes[2].plot(time, speed_TA[:, a], label=f"agent{a}")
+        axes[2].set_ylabel("|v| (km/h)")
+        axes[2].set_xlabel("time (s)")
+
+        title = "Agent speed (body frame)" if use_body_frame else "Agent speed (world frame)"
+        fig.suptitle(title)
+        fig.tight_layout()
+
+        # 保存图像或展示
+        if save_path is not None:
+            plt.savefig(save_path, dpi=150)
+            plt.close(fig)
+        else:
+            plt.show()
