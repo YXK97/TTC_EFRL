@@ -4,8 +4,8 @@ import jax.tree_util as jtu
 from jax._src.tree_util import GetAttrKey
 from typing import Generic, NamedTuple, TypeVar, get_type_hints, List
 
-from ..utils.typing import Any, Array, Bool, Float, Int
-from .utils import merge01
+from defmarl.utils.typing import Any, Array, Bool, Float, Int
+from defmarl.utils.utils import merge01
 
 _State = TypeVar("_State")
 _EnvState = TypeVar("_EnvState")

@@ -1,7 +1,7 @@
 from typing import Optional
 
-from .base import MultiAgentEnv
-from .mve_lanechangeANDovertake import MVELaneChangeAndOverTake
+from defmarl.env.base import MultiAgentEnv
+from defmarl.env.mve_lanechangeANDovertake import MVELaneChangeAndOverTake
 
 ENV = {
     'MVELaneChange': MVELaneChangeAndOverTake,

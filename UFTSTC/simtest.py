@@ -125,6 +125,8 @@ def test(args):
         viz_opts = {}
         video_path = videos_dir / f"{stamp_str}_{video_name}.mp4"
         env.render_video(rollout, video_path, Ta_is_unsafe, viz_opts, dpi=args.dpi)
+        env.plot_agent_speed_from_rollout(rollout)
+        env.plot_agent_speed_from_rollout(rollout,use_body_frame=True)
 
 
 def main():
@@ -139,10 +141,10 @@ def main():
     parser.add_argument("--r", type=float, default=3.9)
     parser.add_argument("--mu", type=float, default=10)
     parser.add_argument("--c", type=float, default=2)
-    parser.add_argument("--k1", type=float, default=1e-5)
-    parser.add_argument("--k2", type=float, default=2e-5)
-    parser.add_argument("--k3", type=float, default=1e-1)
-    parser.add_argument("--k4", type=float, default=1e-2)
+    parser.add_argument("--k1", type=float, default=8e-1)#k1 k2避障 k3 k4 跟踪
+    parser.add_argument("--k2", type=float, default=8e-1)
+    parser.add_argument("--k3", type=float, default=5e-1)
+    parser.add_argument("--k4", type=float, default=3.8e-1)
     parser.add_argument("--v", type=float, default=0.5)
     parser.add_argument("--Delta1", type=float, default=3)
     parser.add_argument("--Delta2", type=float, default=50.)
@@ -150,9 +152,9 @@ def main():
     parser.add_argument("--p-den", type=int, default=5)
     parser.add_argument("--alpha", type=float, default=7/9)
     # PID参数
-    parser.add_argument("--kp", type=float, default=1.2)
+    parser.add_argument("--kp", type=float, default=2)
     parser.add_argument("--ki", type=float, default=0.1)
-    parser.add_argument("--kd", type=float, default=0.3)
+    parser.add_argument("--kd", type=float, default=0)
     parser.add_argument("--max-integral", type=float, default=50.)
     parser.add_argument("--min-integral", type=float, default=-50.)
     # 其他参数
