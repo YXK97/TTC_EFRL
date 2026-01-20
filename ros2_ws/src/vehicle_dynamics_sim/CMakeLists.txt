@@ -16,12 +16,14 @@ find_package(rclpy REQUIRED)
 
 set(msg_files
   "msg/SingleObjectState.msg"
-  "msg/StateActionAndEval.msg"
+  "msg/ObjectState.msg"
+  "msg/AgentControl.msg"
+  "msg/StateEval.msg"
   "msg/SingleAgentControl.msg"
 )
 
 set(action_files
-  "action/AgentControl.action"
+  "action/AgentAction.action"
 )
 
 rosidl_generate_interfaces(${PROJECT_NAME}

@@ -15,8 +15,8 @@ from rclpy.action import ActionClient
 from defmarl.env import make_env
 from defmarl.env.mve import MVE, MVEEnvGraphsTuple
 from defmarl.utils.utils import parse_jax_array
-from vehicle_dynamics_sim.action import AgentAction
-from vehicle_dynamics_sim.msg import ObjectState, SingleObjectState, SingleAgentControl, AgentControl, StateEval
+from vehicle_dynamics_sim.action import AgentControl
+from vehicle_dynamics_sim.msg import ObjectState, SingleObjectState, SingleAgentControl, AgentControl, ObjectEval
 
 
 class EnvNode(Node):
@@ -44,7 +44,9 @@ class EnvNode(Node):
             rclpy.shutdown()
             raise SystemExit('Missing required parameter: path')
 
+        n_gpu = jax.local_device_count()
         self.get_logger().info(f"> initializing EnvNode ...")
+        self.get_logger().info(f"> Using {n_gpu} devices")
 
         # set up environment variables and seed
         os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
@@ -84,13 +86,13 @@ class EnvNode(Node):
         # 发布控制指令（action）
         self.action_pub = self.create_publisher(AgentControl, '/ros_env/action', 10)
         # 发布评估指标（reward/cost）
-        self.eval_pub = self.create_publisher(StateEval, '/ros_env/eval', 10)
+        self.eval_pub = self.create_publisher(ObjectEval, '/ros_env/eval', 10)
         # 创建Action客户端（向ros_action节点请求控制量）
-        self.control_client = ActionClient(self, AgentAction, '/ros_action')
+        self.control_client = ActionClient(self, AgentControl, '/ros_action')
         # 定时器（初始启动，触发第一步逻辑）
         self.timer = self.create_timer(self.env.dt, self.step_callback)
         self.control_result = None  # 缓存 Action 响应结果
-        self.default_action = jnp.zeros((self.env.num_agents, 2))  # 提前初始化默认控制
+        self.default_action = np.zeros((self.env.num_agents, 2))  # 提前初始化默认控制
         # 运行标记 + 异步step标记（避免定时器重复触发）
         self.is_running = True
         self.is_waiting_for_action = False  # 标记是否正在等待action响应
@@ -140,36 +142,42 @@ class EnvNode(Node):
 
         # 2. 发布当前最新的state（未step的原始state）给action_node
         # 此时还未执行step，发布的是当前graph的真实状态，action_node基于此计算action
-        self.publish_state(self.current_graph)
+        self.publish_state(
+            graph=self.current_graph,
+            reward=0.0,  # 第一步无reward，后续step后更新
+            cost=0.0,
+            cost_real=0.0,
+            ad_action=self.default_action  # 首次发布用默认action，不影响
+        )
         self.get_logger().info(f'Published current state (step {self.current_step}), waiting for action...')
 
         # 3. 发送action请求（基于刚发布的最新state）
         self.send_new_action_goal()
 
     def execute_step_with_action(self, action):
-        """收到action后执行step，step后发布eval"""
+        """收到action后执行step，封装为独立函数"""
         if not self.is_running or self.current_step >= self.env.max_episode_steps:
             self.terminate_sim()
             return
 
         step_start = time.time()
-        #  执行动力学step（用最新收到的action，基于当前state）
+        # 1. 执行动力学step（用最新收到的action，基于当前state）
         next_graph, dsYddts, reward, a_cost, a_cost_real, done, info = self.env.step(self.current_graph, action)
         reward = float(reward)
-        cost = float(np.max(a_cost))
-        cost_real = float(np.max(a_cost_real))
-        # step后发布eval到/ros_env/eval
-        self.publish_eval(reward, cost, a)
-        # 更新状态和步数
+        cost = float(jnp.max(a_cost))
+        cost_real = float(jnp.max(a_cost_real))
+
+        # 2. 更新状态和步数
         self.current_step += 1
         self.current_graph = next_graph
-        self.get_logger().info(
-            f'Executed step {self.current_step}/{self.env.max_episode_steps}, reward: {reward:.2f}, cost: {cost:.2f}')
-        # 同步现实时间（补足时延）
+        self.get_logger().info(f'Executed step {self.current_step}/{self.env.max_episode_steps}, reward: {reward:.2f}, cost: {cost:.2f}')
+
+        # 3. 同步现实时间（补足时延）
         step_elapsed = time.time() - step_start
         if step_elapsed < self.env.dt:
             time.sleep(self.env.dt - step_elapsed)
-        # 重启定时器，触发下一轮step逻辑
+
+        # 4. 重启定时器，触发下一轮step逻辑
         self.is_waiting_for_action = False
         self.timer = self.create_timer(self.env.dt, self.step_callback)
 
@@ -192,7 +200,7 @@ class EnvNode(Node):
             self.execute_step_with_action(self.default_action)
 
     def result_callback(self, future):
-        """Action 结果回调：收到action后立即发布action + 执行step"""
+        """Action 结果回调：收到action后立即执行step（核心修改）"""
         try:
             result = future.result().result
 
@@ -202,24 +210,18 @@ class EnvNode(Node):
                 # 验证控制量形状
                 if ad_action.shape == (self.env.num_agents, 2):
                     self.get_logger().info(f'Success get multi-agent control (shape: {ad_action.shape}): {ad_action}')
-                    # 核心修改：收到action后，先发布到/ros_env/action
-                    self.publish_action(ad_action)
                     # 用最新收到的action执行step
                     self.execute_step_with_action(ad_action)
                 else:
                     self.get_logger().warn(
                         f'Control shape mismatch: {ad_action.shape} vs ({self.env.num_agents},2), use default {self.default_action}')
-                    self.publish_action(self.default_action)
                     self.execute_step_with_action(self.default_action)
             else:
-                self.get_logger().warn(
-                    f'Action result invalid (success={result.success}), use default {self.default_action}')
-                self.publish_action(self.default_action)
+                self.get_logger().warn(f'Action result invalid (success={result.success}), use default {self.default_action}')
                 self.execute_step_with_action(self.default_action)
 
         except Exception as e:
             self.get_logger().warn(f'Failed to get action result: {e}, use default {self.default_action}')
-            self.publish_action(self.default_action)
             self.execute_step_with_action(self.default_action)
 
     def send_new_action_goal(self):
@@ -230,7 +232,7 @@ class EnvNode(Node):
             self.execute_step_with_action(self.default_action)
             return
         # 构造空Goal，异步发送
-        goal_msg = AgentAction.Goal()
+        goal_msg = AgentControl.Goal()
         future = self.control_client.send_goal_async(goal_msg)
         future.add_done_callback(self.goal_response_callback)
 
@@ -281,7 +283,7 @@ class EnvNode(Node):
 
     def publish_eval(self, reward: float, cost: float, cost_real: float):
         """仅发布评估指标到 /ros_env/eval"""
-        msg = StateEval()
+        msg = ObjectEval()
         msg.reward = reward
         msg.cost = cost
         msg.cost_real = cost_real

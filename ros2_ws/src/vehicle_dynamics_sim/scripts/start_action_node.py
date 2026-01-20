@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-import argparse
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "0" # 由于是测试，没有进行数据并行的必要，强制使用第0个GPU
 import rclpy
 import yaml
+import time
 import jax
 import jax.numpy as jnp
 import jax.random as jr
@@ -12,12 +11,13 @@ import numpy as np
 from typing import Optional
 from rclpy.node import Node
 from rclpy.action import ActionServer
+
 from defmarl.algo import make_algo
 from defmarl.env import make_env
 from defmarl.env.mve import MVEEnvState
 from defmarl.utils.utils import parse_jax_array
-from vehicle_dynamics_sim.msg import StateActionAndEval, SingleAgentControl
-from vehicle_dynamics_sim.action import AgentControl
+from vehicle_dynamics_sim.msg import ObjectState, SingleAgentControl
+from vehicle_dynamics_sim.action import AgentAction
 
 
 class ActionNode(Node):
@@ -89,6 +89,8 @@ class ActionNode(Node):
             max_step=self.args.max_step,
             full_observation=self.args.full_observation,
             area_size=config.area_size if self.args.area_size is None else self.args.area_size,
+            reward_min=config.reward_min,
+            reward_max=config.reward_max
         ) # 和EnvNode一样的环境，相当于算法自己的环境备份
         self.env = env
 
@@ -114,8 +116,14 @@ class ActionNode(Node):
         )
         algo.load(model_path, from_iter)
         self.algo = algo
-        self.stochastic = self.args.stochastic
+        try:
+            self.gpu_device = jax.devices('gpu')[0]
+            self.get_logger().info(f"> 成功获取 GPU 设备：{self.gpu_device}")
+        except IndexError:
+            self.get_logger().warn("> 未检测到 GPU 设备，将使用 CPU 运行")
+            self.gpu_device = jax.devices('cpu')[0]
 
+        self.stochastic = self.args.stochastic
         if self.args.stochastic:
             def act_fn(x, z, rnn_state, key):
                 action, _, new_rnn_state = algo.step(x, z, rnn_state, key)
@@ -126,7 +134,7 @@ class ActionNode(Node):
         self.act_fn = jax.jit(act_fn)
 
         z_fn = algo.get_opt_z if hasattr(algo, "get_opt_z") else None
-        self.z_fn = z_fn
+        self.z_fn = jax.jit(z_fn)
 
         init_rnn_state = algo.init_rnn_state
         if hasattr(algo, "init_Vh_rnn_state"):
@@ -135,15 +143,20 @@ class ActionNode(Node):
             init_Vh_rnn_state = None
         self.actor_rnn_state = init_rnn_state
         self.Vh_rnn_state = init_Vh_rnn_state
+        self.actor_rnn_state = jax.device_put(self.actor_rnn_state, self.gpu_device)
+        self.get_logger().info(f"> Actor RNN 状态设备：{self.actor_rnn_state.device()}")
+        if self.Vh_rnn_state is not None:
+            self.Vh_rnn_state = jax.device_put(self.Vh_rnn_state, self.gpu_device)
+            self.get_logger().info(f"> Vh RNN 状态设备：{self.Vh_rnn_state.device()}")
 
         self.default_control = jnp.zeros((self.algo.n_agents, self.algo.action_dim))
 
 
         # 订阅状态量
-        self.state_sub = self.create_subscription(StateActionAndEval, '/ros_env', self.state_callback,10)
+        self.state_sub = self.create_subscription(ObjectState, '/ros_env/state', self.state_callback,10)
 
         # 创建Action服务器（响应控制量请求）
-        self.control_server = ActionServer(self, AgentControl, '/ros_action', self.control_callback)
+        self.control_server = ActionServer(self, AgentAction, '/ros_action', self.control_callback)
 
         # 缓存最新状态
         self.latest_graph = None
@@ -187,36 +200,36 @@ class ActionNode(Node):
         return args
 
 
-    def state_callback(self, msg:StateActionAndEval):
+    def state_callback(self, msg:ObjectState):
         """订阅状态量，缓存最新状态；检测终止信号"""
         if not msg.as_agent_states or not msg.as_goal_states:
-            self.is_running = False
-            self.get_logger().info('Received empty state message, stopping action node...')
-            self.control_server.destroy()
-            self.state_sub.destroy()
-            rclpy.shutdown()
-            return
+            #self.is_running = False
+            self.get_logger().info('Received empty state message, stand by...')
+            #self.control_server.destroy()
+            #self.state_sub.destroy()
+            #rclpy.shutdown()
+        else:
+            # 缓存状态
+            aS_agent_states_list = [[single_state.x, single_state.y, single_state.vx, single_state.vy, single_state.theta, \
+                single_state.dthetadt, single_state.bw, single_state.bh] for single_state in msg.as_agent_states]
+            aS_goal_states_list = [[single_state.x, single_state.y, single_state.vx, single_state.vy, single_state.theta, \
+                single_state.dthetadt, single_state.bw, single_state.bh] for single_state in msg.as_goal_states]
+            oS_obst_states_list = [[single_state.x, single_state.y, single_state.vx, single_state.vy, single_state.theta, \
+                single_state.dthetadt, single_state.bw, single_state.bh] for single_state in msg.os_obst_states]
+            aS_agent_states = jnp.array(aS_agent_states_list, dtype=jnp.float32)
+            aS_goal_states = jnp.array(aS_goal_states_list, dtype=jnp.float32)
+            oS_obst_states = jnp.array(oS_obst_states_list, dtype=jnp.float32)
 
-        # 缓存状态
-        aS_agent_states_list = [[single_state.x, single_state.y, single_state.vx, single_state.vy, single_state.theta, \
-            single_state.dthetadt, single_state.bw, single_state.bh] for single_state in msg.as_agent_states]
-        aS_goal_states_list = [[single_state.x, single_state.y, single_state.vx, single_state.vy, single_state.theta, \
-            single_state.dthetadt, single_state.bw, single_state.bh] for single_state in msg.as_goal_states]
-        oS_obst_states_list = [[single_state.x, single_state.y, single_state.vx, single_state.vy, single_state.theta, \
-            single_state.dthetadt, single_state.bw, single_state.bh] for single_state in msg.os_obst_states]
-        aS_agent_states = jnp.array(aS_agent_states_list, dtype=jnp.float32)
-        aS_goal_states = jnp.array(aS_goal_states_list, dtype=jnp.float32)
-        oS_obst_states = jnp.array(oS_obst_states_list, dtype=jnp.float32)
-
-        env_state = MVEEnvState(aS_agent_states, aS_goal_states, oS_obst_states)
-        self.latest_graph = self.env.get_graph(env_state)
-        self.get_logger().info(f'Received valid state: agents={aS_agent_states.shape}, goals={aS_goal_states.shape}')
+            env_state = MVEEnvState(aS_agent_states, aS_goal_states, oS_obst_states)
+            self.latest_graph = jax.device_put(self.env.get_graph(env_state), self.gpu_device)
+            self.get_logger().info(
+                f'Received valid state: agents={aS_agent_states.shape}, goals={aS_goal_states.shape} (设备：{self.latest_graph.n_node.device()})')
 
 
     def control_callback(self, goal_handle):
         """Action服务器回调：输入状态→神经网络输出控制量"""
         if not self.is_running:
-            result = AgentControl.Result()
+            result = AgentAction.Result()
             result.success = False
             result.message = 'Action node stopped'
             goal_handle.abort()
@@ -224,39 +237,49 @@ class ActionNode(Node):
 
         # 无状态则返回默认控制量
         if self.latest_graph is None:
-            self.get_logger().warn('No state received, use default control [0,0]')
+            self.get_logger().warn(f'No state received, use default control {self.default_control}')
             action = self.default_control
         else:
+            self.get_logger().info(f"> 输入图数据设备：{self.latest_graph.n_node.device()}")
+
+            z_start_time = time.time()
             if self.z_fn is not None:
                 z, Vh_rnn_state = self.z_fn(self.latest_graph, self.Vh_rnn_state)
-                z_max = np.max(z, axis=0)
+                z_max = jnp.max(z, axis=0)
                 z = jnp.repeat(z_max[None], self.algo.n_agents, axis=0)
                 self.Vh_rnn_state = Vh_rnn_state
             else:
                 z = -(self.env.reward_max+self.env.reward_min)/2 * jnp.ones((self.algo.n_agents, 1))
                 # 对于informarl和informarl-lagr，直接在每次测试时使用固定的z即可
+            z_end_time = time.time()
+            self.get_logger().debug(f"z推理耗时: {(z_end_time - z_start_time):.8f}s")
+
+            act_start_time = time.time()
             if not self.stochastic:
                 action, actor_rnn_state = self.act_fn(self.latest_graph, z, self.actor_rnn_state)
             else:
                 action, actor_rnn_state = self.act_fn(self.latest_graph, z, self.actor_rnn_state, self.key)
+            act_end_time = time.time()
+            self.get_logger().debug(f"act推理耗时: {(act_end_time - act_start_time):.8f}s")
 
             # 更新rnn_state
             self.actor_rnn_state = actor_rnn_state
 
         # 构造响应
-        result = AgentControl.Result()
+        result = AgentAction.Result()
 
-        def _array_to_single_action(d_action: np.ndarray) -> SingleAgentControl:
+        def _array_to_single_action(d_action: jnp.ndarray) -> SingleAgentControl:
             """将单个物体的动作数组（长度8）转为SingleAgentControl action"""
             single_action = SingleAgentControl()
             single_action.ax = float(d_action[0])
             single_action.delta = float(d_action[1])
             return single_action
 
-        ad_action_np = np.asarray(action)
-        result.ad_action = [_array_to_single_action(d_action_np) for d_action_np in ad_action_np]
+        result.ad_action = [_array_to_single_action(d_action_np) for d_action_np in action]
         result.success = True
-        result.message = f'Control: acc={ad_action_np[:,0]}, delta={ad_action_np[:,1]}'
+        acc_values = [float(d_action[0]) for d_action in action]
+        delta_values = [float(d_action[1]) for d_action in action]
+        result.message = f'Control: acc={acc_values}, delta={delta_values}'
         goal_handle.succeed()
 
         return result

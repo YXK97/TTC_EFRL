@@ -12,6 +12,7 @@ test_*.py
 ros2_ws/build/
 ros2_ws/install/
 ros2_ws/log/
+ros2_bag/
 
 # UFTSTC related
 UFTSTC/videos/

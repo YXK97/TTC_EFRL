@@ -1012,10 +1012,11 @@ class HandMadeSceneIdenticalSpeed(LaneChangeANDOvertakeScene):
                                                                  S_start_state, S_terminal_state)
 
         # 生成初始agent
-        agent_x = jnp.array([-69.])[0]
+        agent_x = jnp.array([-80.])[0]
+        agent_vx = jnp.array([80])[0]
         a_agent_x = jnp.repeat(agent_x[None], self.num_agents, axis=0)  # 变道前同一x
         a_agent_y = jnp.repeat(start_y[None], self.num_agents, axis=0)
-        a_agent_vx = jnp.repeat(start_vx[None], self.num_agents, axis=0)  # km/h
+        a_agent_vx = jnp.repeat(agent_vx[None], self.num_agents, axis=0)  # km/h
         aSm3_other0 = jnp.repeat(Sm3_other0[None, :], self.num_agents, axis=0)
         aS_agent_state = jnp.concatenate([a_agent_x[:, None], a_agent_y[:, None], a_agent_vx[:, None], aSm3_other0],
                                          axis=1)

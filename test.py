@@ -126,6 +126,7 @@ def test(args):
 
     rewards = []
     costs = []
+    costs_real = []
     is_unsafes = []
     rates = []
     rollouts = []
@@ -138,12 +139,15 @@ def test(args):
 
         epi_reward = rollout.rewards.sum()
         epi_cost = rollout.costs.max()
+        epi_cost_real = rollout.costs_real.max()
         rewards.append(epi_reward)
         costs.append(epi_cost)
+        costs_real.append(epi_cost_real)
         rollouts.append(rollout)
 
         safe_rate = 1 - is_unsafes[-1].max(axis=0).mean()
-        print(f"epi: {i_epi}, reward: {epi_reward:.3f}, cost: {epi_cost:.3f}, safe rate: {safe_rate * 100:.3f}%")
+        print(f"epi: {i_epi}, reward: {epi_reward:.3f}, cost: {epi_cost:.3f}, cost_real: {epi_cost_real:.3f}, "
+              f"safe rate: {safe_rate * 100:.3f}%")
 
         rates.append(np.array(safe_rate))
 
@@ -153,6 +157,7 @@ def test(args):
     print(
         f"reward: {np.mean(rewards):.3f}, std: {np.std(rewards):.3f}, min/max reward: {np.min(rewards):.3f}/{np.max(rewards):.3f}, "
         f"cost: {np.mean(costs):.3f} min/max cost: {np.min(costs):.3f}/{np.max(costs):.3f}, "
+        f"cost_real: {np.mean(costs_real):.3f} min/max cost_real: {np.min(costs_real):.3f}/{np.max(costs_real):.3f}, "
         f"safe_rate: {safe_mean * 100:.3f}%, std: {safe_std * 100:.3f}%"
     )
 

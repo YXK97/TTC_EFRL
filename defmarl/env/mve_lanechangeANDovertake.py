@@ -130,7 +130,7 @@ class MVELaneChangeAndOverTake(MVE):
         xrange = self.params["default_state_range"][:2]
         yrange = self.params["default_state_range"][2:4]
         lanewidth = self.params["lane_width"]
-        agents, obsts, all_goals, all_dsYddts = gen_scene_randomly(key, self.num_agents, self.num_goals, xrange,
+        agents, obsts, all_goals, all_dsYddts = gen_handmade_scene_randomly(key, self.num_agents, self.num_goals, xrange,
                                                                    yrange, lanewidth, c_ycs)
         self.all_goals = all_goals
         self.all_dsYddts = all_dsYddts
