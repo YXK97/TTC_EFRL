@@ -1,54 +1,36 @@
 """运行本程序之前应当先colcon build"""
-
+import argparse
 import os
 import sys
 import numpy as np
 import rclpy
+import csv
+from pathlib import Path
 from rclpy.serialization import deserialize_message
 from rosbag2_py import SequentialReader, StorageOptions, ConverterOptions
 from rosidl_runtime_py.utilities import get_message
+from typing import Tuple
 
-# ===================== 核心：添加ROS2编译后的msg路径 =====================
-# 你指定的目标路径
-ROS2_MSG_PATH = "/home/yxk-vtd/TTC_EFRL/ros2_ws/install/vehicle_dynamics_sim/lib/python3.8/site-packages"
+ROS2_TYPESUPPORT_PATH = "/opt/ros/galactic/lib/python3.8/site-packages"
+if ROS2_TYPESUPPORT_PATH not in sys.path:
+    sys.path.append(ROS2_TYPESUPPORT_PATH)
 
-# 1. 检查路径是否存在
-if not os.path.exists(ROS2_MSG_PATH):
-    print(f"错误：指定的路径不存在 → {ROS2_MSG_PATH}")
+ROS2_PKG_INSTALL_PATH = "/home/yxk-vtd/TTC_EFRL/ros2_ws/install/vehicle_dynamics_sim/lib/python3.8/site-packages"
+if not os.path.exists(ROS2_PKG_INSTALL_PATH):
+    print(f"错误：指定的路径不存在 → {ROS2_PKG_INSTALL_PATH}")
     print("请检查路径拼写或确认colcon build已成功编译msg包")
     sys.exit(1)
-
-# 2. 将路径添加到sys.path（确保Python能找到msg模块）
-if ROS2_MSG_PATH not in sys.path:
-    sys.path.append(ROS2_MSG_PATH)
-    print(f"已将路径添加到sys.path：{ROS2_MSG_PATH}")
-
-# 3. 导入自定义msg（请替换为你实际的msg模块名和类名）
-# 说明：这里的导入路径对应你msg包的结构，例如：
-# 如果你的msg文件是 vehicle_dynamics_sim/msg/State.msg
-# 则导入路径为 from vehicle_dynamics_sim.msg import State
+if ROS2_PKG_INSTALL_PATH not in sys.path:
+    sys.path.append(ROS2_PKG_INSTALL_PATH)
 try:
-    from vehicle_dynamics_sim.msg import State, Action, Eval
-
-    print("✅ 自定义msg导入成功！")
+    from vehicle_dynamics_sim.msg import AgentControl, ObjectState, SingleAgentControl, SingleObjectState, StateEval
 except ImportError as e:
-    print(f"❌ 自定义msg导入失败：{e}")
-    print("请检查：")
-    print("  1. msg包名是否正确（vehicle_dynamics_sim）")
-    print("  2. msg类名是否正确（State/Action/Eval）")
-    print("  3. colcon build是否成功编译了msg包")
+    print(f"自定义msg导入失败：{e}")
     sys.exit(1)
 
+TARGET_TOPIC = ['/ros_env/state', '/ros_env/action', '/ros_env/eval']
 
-# ===================== ROSBag分析核心逻辑 =====================
-def analyze_rosbag(bag_path, target_topics):
-    """
-    分析rosbag文件，统计指定话题的消息数量和录制频率
-
-    参数:
-        bag_path: rosbag文件路径（.db3文件）
-        target_topics: 需要分析的话题列表
-    """
+def analyze_rosbag(bag_path: str) -> dict:
     # 初始化存储配置（指定bag文件路径）
     storage_options = StorageOptions(
         uri=bag_path,
@@ -66,7 +48,7 @@ def analyze_rosbag(bag_path, target_topics):
             'count': 0,  # 消息数量
             'timestamps': [],  # 时间戳列表（纳秒）
             'messages': []  # 存储解析后的消息（可选）
-        } for topic in target_topics
+        } for topic in TARGET_TOPIC
     }
 
     # 获取所有可用话题及其类型
@@ -74,9 +56,9 @@ def analyze_rosbag(bag_path, target_topics):
     topic_type_map = {t.name: t.type for t in topic_types}
 
     # 验证目标话题是否存在
-    for topic in target_topics:
+    for topic in TARGET_TOPIC:
         if topic not in topic_type_map:
-            print(f"⚠️ 警告：话题 {topic} 不存在于rosbag中！")
+            print(f"警告：话题 {topic} 不存在于rosbag中！")
             continue
 
     # 遍历所有消息
@@ -89,26 +71,23 @@ def analyze_rosbag(bag_path, target_topics):
             msg_total += 1
 
             # 只处理目标话题
-            if topic_name in target_topics:
+            if topic_name in TARGET_TOPIC:
                 # 统计消息数量和时间戳
                 topic_stats[topic_name]['count'] += 1
                 topic_stats[topic_name]['timestamps'].append(timestamp)
 
-                # （可选）解析并存储完整消息（如需查看具体数据可取消注释）
-                # msg_type = get_message(topic_type_map[topic_name])
-                # msg = deserialize_message(data, msg_type)
-                # topic_stats[topic_name]['messages'].append(msg)
-                # 示例：打印第一条state消息的内容
-                # if topic_name == "/ros_env/state" and topic_stats[topic_name]['count'] == 1:
-                #     print(f"\n📌 第一条/ros_env/state消息内容：{msg}")
+                # 解析并存储完整消息（如需查看具体数据可取消注释）
+                msg_type = get_message(topic_type_map[topic_name])
+                msg = deserialize_message(data, msg_type)
+                topic_stats[topic_name]['messages'].append(msg)
 
         except Exception as e:
-            print(f"\n❌ 读取消息时出错：{e}")
+            print(f"读取消息时出错：{e}")
             continue
 
     # 计算并输出统计结果
     print("\n" + "=" * 50)
-    print("📊 ROSBag 分析结果")
+    print("ROSBag 分析结果")
     print("=" * 50)
     print(f"总解析消息数：{msg_total}")
     for topic, stats in topic_stats.items():
@@ -137,7 +116,11 @@ def analyze_rosbag(bag_path, target_topics):
         print(f"  ├─ 消息最小间隔：{min_time_diff:.4f} 秒")
         print(f"  └─ 消息最大间隔：{max_time_diff:.4f} 秒")
 
+    return topic_stats
 
+
+
+"""
 def render_video(
         self,
         rollout: Rollout,
@@ -353,28 +336,217 @@ def render_video(
     save_anim(ani, video_path)
 
 
+def plot_agent_speed_from_rollout(self, rollout: Rollout, save_path=None, use_body_frame=False):
+    #绘制 agent 速度图
+    #:param rollout: 一个包含图数据的 Rollout 对象
+    #:param save_path: 如果传入路径，就保存为 png 文件，否则直接显示
+    #:param use_body_frame: 是否使用车身坐标系进行速度转换
+
+    T = len(rollout.graph.n_node)  # 时间步数
+    A = self.num_agents  # 从类的实例获取 agent 数量
+    vx_TA = np.zeros((T, A), dtype=np.float32)
+    vy_TA = np.zeros((T, A), dtype=np.float32)
+
+    # 遍历所有时间步，提取速度信息
+    for t in range(T):
+        g = tree_index(rollout.graph, t)
+        vx = np.array(g.states[:A, 2])
+        vy = np.array(g.states[:A, 3])
+        if use_body_frame:
+            # 转换到车身坐标系
+            theta_deg = np.array(g.states[:A, 4])
+            theta = theta_deg * np.pi / 180.0
+            c, s = np.cos(theta), np.sin(theta)
+            vbx = c * vx + s * vy
+            vby = -s * vx + c * vy
+            vx, vy = vbx, vby
+        vx_TA[t] = vx
+        vy_TA[t] = vy
+
+    # 计算总速度
+    speed_TA = np.sqrt(vx_TA**2 + vy_TA**2)  # km/h
+    time = np.arange(T) * float(self.dt)  # 转换为时间秒
+
+    # 绘制图形
+    fig, axes = plt.subplots(3, 1, figsize=(10, 8), sharex=True)
+    for a in range(A):
+        axes[0].plot(time, vx_TA[:, a], label=f"agent{a}")
+    axes[0].set_ylabel("vx (km/h)")
+    axes[0].legend(ncol=4, fontsize=8)
+    for a in range(A):
+        axes[1].plot(time, vy_TA[:, a], label=f"agent{a}")
+    axes[1].set_ylabel("vy (km/h)")
+    for a in range(A):
+        axes[2].plot(time, speed_TA[:, a], label=f"agent{a}")
+    axes[2].set_ylabel("|v| (km/h)")
+    axes[2].set_xlabel("time (s)")
+
+    title = "Agent speed (body frame)" if use_body_frame else "Agent speed (world frame)"
+    fig.suptitle(title)
+    fig.tight_layout()
+
+    # 保存图像或展示
+    if save_path is not None:
+        plt.savefig(save_path, dpi=150)
+        plt.close(fig)
+    else:
+        plt.show()
+"""
+
+
+def states_to_csv(csv_save_root_path: str, topic_stats: dict):
+    #把一个rosbag中的/ros_env/states转换为csv文件，每个ego和每个obst都单独创立一个csv，行代表state，列之间的时间差为env.dt
+
+    save_root = Path(csv_save_root_path)
+    save_root.mkdir(parents=True, exist_ok=True)
+    print(f"CSV文件将保存至：{save_root.absolute()}")
+
+    STATE_TOPIC = "/ros_env/state"
+    if STATE_TOPIC not in topic_stats:
+        print(f"警告：{STATE_TOPIC}话题不在topic_stats中，跳过CSV生成")
+        return
+
+    state_data = topic_stats[STATE_TOPIC]
+    if state_data['count'] == 0 or len(state_data['messages']) == 0:
+        print(f"警告：{STATE_TOPIC}话题无有效消息，跳过CSV生成")
+        return
+
+    # 提取关键数据：消息列表、时间戳（转换为秒）
+    state_messages = state_data['messages']
+    timestamps_sec = np.array(state_data['timestamps']) / 1e9  # 纳秒转秒
+    # 计算每个时间步的dt（相邻时间差，第一个步dt为0）
+    dt_list = [0.0]  # 第0步dt为0
+    for i in range(1, len(timestamps_sec)):
+        dt = timestamps_sec[i] - timestamps_sec[i - 1]
+        dt_list.append(round(dt, 6))  # 保留6位小数，避免浮点误差
+
+    # 1.4 定义SingleObjectState的字段（与msg完全对应）
+    state_fields = [
+        "x",  # x方向位置 m
+        "y",  # y方向位置 m
+        "vx",  # x方向速度 km/h
+        "vy",  # y方向速度 km/h
+        "theta",  # 航向角 deg
+        "dthetadt",  # 航向角角速度 deg/s
+        "bw",  # 包围盒宽度（纵向） m
+        "bh",  # 包围盒长度（横向） m
+        "time_step",  # 时间步索引
+        "dt",  # 与上一步的时间差（秒）
+        "timestamp"  # 原始时间戳（秒）
+    ]
+
+    print("\n开始解析Ego状态...")
+    # 遍历所有时间步的state消息，提取ego数据
+    ego_all_data = {}  # 格式：{ego_index: [step0数据, step1数据, ...]}
+    for step_idx, (state_msg, dt, ts) in enumerate(zip(state_messages, dt_list, timestamps_sec)):
+        # 校验msg是否包含as_agent_states（ego）
+        if not hasattr(state_msg, 'as_agent_states'):
+            print(f"警告：第{step_idx}步消息无as_agent_states字段，跳过")
+            continue
+
+        # 遍历当前步的所有ego（通常只有1个，按索引区分）
+        for ego_idx, ego_state in enumerate(state_msg.as_agent_states):
+            # 初始化该ego的数据列表
+            if ego_idx not in ego_all_data:
+                ego_all_data[ego_idx] = []
+
+            # 提取当前ego的所有状态字段
+            ego_step_data = {
+                "x": ego_state.x,
+                "y": ego_state.y,
+                "vx": ego_state.vx,
+                "vy": ego_state.vy,
+                "theta": ego_state.theta,
+                "dthetadt": ego_state.dthetadt,
+                "bw": ego_state.bw,
+                "bh": ego_state.bh,
+                "time_step": step_idx,
+                "dt": dt,
+                "timestamp": round(ts, 6)
+            }
+            ego_all_data[ego_idx].append(ego_step_data)
+
+    # 为每个ego生成CSV文件
+    for ego_idx, ego_data in ego_all_data.items():
+        csv_path = save_root / f"ego_{ego_idx}.csv"
+        with open(csv_path, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.DictWriter(f, fieldnames=state_fields)
+            writer.writeheader()  # 写入列名
+            writer.writerows(ego_data)  # 写入所有行数据
+        print(f"Ego {ego_idx} 已保存至：{csv_path}")
+
+    # ===================== 3. 解析障碍物状态并生成CSV =====================
+    print("\n开始解析障碍物状态...")
+    # 遍历所有时间步的state消息，提取障碍物数据
+    obst_all_data = {}  # 格式：{obst_index: [step0数据, step1数据, ...]}
+    for step_idx, (state_msg, dt, ts) in enumerate(zip(state_messages, dt_list, timestamps_sec)):
+        # 校验msg是否包含os_obst_states（障碍物）
+        if not hasattr(state_msg, 'os_obst_states'):
+            print(f"警告：第{step_idx}步消息无os_obst_states字段，跳过")
+            continue
+
+        # 遍历当前步的所有障碍物（按索引区分）
+        for obst_idx, obst_state in enumerate(state_msg.os_obst_states):
+            # 初始化该障碍物的数据列表
+            if obst_idx not in obst_all_data:
+                obst_all_data[obst_idx] = []
+
+            # 提取当前障碍物的所有状态字段
+            obst_step_data = {
+                "x": obst_state.x,
+                "y": obst_state.y,
+                "vx": obst_state.vx,
+                "vy": obst_state.vy,
+                "theta": obst_state.theta,
+                "dthetadt": obst_state.dthetadt,
+                "bw": obst_state.bw,
+                "bh": obst_state.bh,
+                "time_step": step_idx,
+                "dt": dt,
+                "timestamp": round(ts, 6)
+            }
+            obst_all_data[obst_idx].append(obst_step_data)
+
+    # 为每个障碍物生成CSV文件
+    for obst_idx, obst_data in obst_all_data.items():
+        csv_path = save_root / f"obstacle_{obst_idx}.csv"
+        with open(csv_path, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.DictWriter(f, fieldnames=state_fields)
+            writer.writeheader()  # 写入列名
+            writer.writerows(obst_data)  # 写入所有行数据
+        print(f"障碍物 {obst_idx} 已保存至：{csv_path}")
+
+    print(f"\nCSV生成完成！共生成：")
+    print(f"   - Ego文件数：{len(ego_all_data)} 个")
+    print(f"   - 障碍物文件数：{len(obst_all_data)} 个")
+    print(f"   - 保存路径：{save_root.absolute()}")
+
+
+
 if __name__ == "__main__":
-    # ===================== 配置参数（请根据实际修改） =====================
-    BAG_FILE_PATH = "/path/to/your/bag_file.db3"  # 替换为你的rosbag文件路径
-    TARGET_TOPICS = ["/ros_env/state", "/ros_env/action", "/ros_env/eval"]
+    parser = argparse.ArgumentParser()
 
-    # 检查bag文件是否存在
-    if not os.path.exists(BAG_FILE_PATH):
-        print(f"❌ 错误：ROSBag文件不存在 → {BAG_FILE_PATH}")
-        sys.exit(1)
+    # rosbag path
+    parser.add_argument("--path", type=str, required=True)
+    # csv save path
+    parser.add_argument("--csv-path", type=str, default=None)
+    args = parser.parse_args()
 
-    # 初始化rclpy（解析msg需要）
+    if args.csv_path is None:
+        args.csv_path = str(Path(args.path).parent.absolute())
+
+    # 初始化rclpy
     rclpy.init()
 
-    # 执行分析
     try:
-        analyze_rosbag(BAG_FILE_PATH, TARGET_TOPICS)
+        # 1. 分析rosbag
+        topic_stats = analyze_rosbag(args.path)
+
+        # 2. 生成CSV文件
+        if topic_stats:
+            states_to_csv(args.csv_path, topic_stats)
     except Exception as e:
-        print(f"\n❌ 分析过程出错：{e}")
+        print(f"程序执行出错：{e}")
     finally:
-        # 确保rclpy正常关闭
         rclpy.shutdown()
-        print("\n✅ 分析完成，rclpy已正常关闭")
-
-
-
+        print("\n程序正常退出")
