@@ -14,7 +14,7 @@ from matplotlib.collections import LineCollection
 from matplotlib.patches import FancyArrow
 
 from .mve import MVE, MVEEnvState, MVEEnvGraphsTuple
-from .designed_scene_gen import gen_scene_randomly, gen_handmade_scene_randomly
+from .designed_scene_gen import gen_scene_randomly, gen_handmade_scene
 from .utils import process_lane_centers, process_lane_marks, relative_state
 from defmarl.trainer.data import Rollout
 from defmarl.utils.graph import EdgeBlock, GetGraph, GraphsTuple
@@ -130,8 +130,8 @@ class MVELaneChangeAndOverTake(MVE):
         xrange = self.params["default_state_range"][:2]
         yrange = self.params["default_state_range"][2:4]
         lanewidth = self.params["lane_width"]
-        agents, obsts, all_goals, all_dsYddts = gen_handmade_scene_randomly(key, self.num_agents, self.num_goals, xrange,
-                                                                   yrange, lanewidth, c_ycs)
+        # agents, obsts, all_goals, all_dsYddts = gen_scene_randomly(key, self.num_agents, self.num_goals, xrange, yrange, lanewidth, c_ycs)
+        agents, obsts, all_goals, all_dsYddts = gen_handmade_scene(key, self.num_agents, self.num_goals, xrange, yrange, lanewidth, c_ycs)
         self.all_goals = all_goals
         self.all_dsYddts = all_dsYddts
         goals_init_indices = find_closest_goal_indices(agents, all_goals)
