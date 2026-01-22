@@ -1004,7 +1004,7 @@ class HandMadeSceneIdenticalSpeed(LaneChangeANDOvertakeScene):
         terminal_x = jnp.array([80.])[0]
         start_y = self.lane_centers[-1]
         terminal_y = self.lane_centers[0]
-        start_vx = terminal_vx = jnp.array([55])[0]  # km/h
+        start_vx = terminal_vx = jnp.array([69])[0]  # km/h
         Sm3_other0 = jnp.zeros((self.state_dim - 3,), dtype=jnp.float32)
         S_start_state = jnp.concatenate([start_x[None], start_y[None], start_vx[None], Sm3_other0])
         S_terminal_state = jnp.concatenate([terminal_x[None], terminal_y[None], terminal_vx[None], Sm3_other0])

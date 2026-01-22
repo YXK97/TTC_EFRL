@@ -137,17 +137,17 @@ def main():
 
     # optional arguments
     # UFTSTC参数
-    parser.add_argument("--Af", type=float, default=17)
+    parser.add_argument("--Af", type=float, default=18)
     parser.add_argument("--r", type=float, default=3.9)
-    parser.add_argument("--mu", type=float, default=10)
-    parser.add_argument("--c", type=float, default=2)
-    parser.add_argument("--k1", type=float, default=8e-1)#k1 k2避障 k3 k4 跟踪
-    parser.add_argument("--k2", type=float, default=8e-1)
-    parser.add_argument("--k3", type=float, default=5e-1)
-    parser.add_argument("--k4", type=float, default=3.8e-1)
-    parser.add_argument("--v", type=float, default=0.5)
+    parser.add_argument("--mu", type=float, default=12.59)
+    parser.add_argument("--c", type=float, default=1.52)
+    parser.add_argument("--k1", type=float, default=0.5218)#k1 k2避障 k3 k4 跟踪
+    parser.add_argument("--k2", type=float, default=0.849)
+    parser.add_argument("--k3", type=float, default=0.31)
+    parser.add_argument("--k4", type=float, default=0.921)
+    parser.add_argument("--v", type=float, default=0.2)
     parser.add_argument("--Delta1", type=float, default=3)
-    parser.add_argument("--Delta2", type=float, default=50.)
+    parser.add_argument("--Delta2", type=float, default=50)
     parser.add_argument("--p-num", type=int, default=3)
     parser.add_argument("--p-den", type=int, default=5)
     parser.add_argument("--alpha", type=float, default=7/9)

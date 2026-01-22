@@ -94,9 +94,8 @@ class PIDController:
     @ft.partial(jax.jit, static_argnums=(0,))
     def normalize_ax(self, ax:jnp.ndarray) -> jnp.ndarray:
         """处理单位为m/s^2"""
-        ax_center = self.max_ax + self.min_ax
-        #ax_half = self.max_ax - ax_center
-        ax_half = self.max_ax - self.min_ax
+        ax_center = (self.max_ax + self.min_ax)/2
+        ax_half = self.max_ax - ax_center
         a_normalized_ax = (ax - ax_center) / ax_half
         return a_normalized_ax
 

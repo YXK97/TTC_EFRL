@@ -101,19 +101,44 @@ class UFTSTCController:
     def calc_BD_dBD_ddBD(self, aS_agent_states: AgentState, oS_obst_states: ObstState
                          ) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
         Uod, dUod, ddUod = self.calc_Uod_dUod_ddUod(aS_agent_states, oS_obst_states)
+        delta_xoe, _, _ = self.calc_delta_xoe_dxoe_ddxoe( aS_agent_states, oS_obst_states )
         eps = 1e-3
         ao_BD = jnp.log(self.Af**2 / (self.Af**2 - Uod**2 + eps))
         ao_dBD = 2 * Uod * dUod / (self.Af**2 - Uod**2 + eps)
         ao_ddBD = 2 * (dUod**2 + Uod*ddUod) / (self.Af**2 - Uod**2 + eps) + 4 * Uod**2 * dUod**2 / ((self.Af**2 - Uod**2)**2 + eps)
-        return ao_BD, ao_dBD, ao_ddBD
+        return ao_BD, ao_dBD, ao_ddBD,delta_xoe
 
-
+    '''
     @ft.partial(jax.jit, static_argnums=(0,))
     def integrate_BD_update(self, ao_BD:jnp.ndarray) -> jnp.ndarray:
-        ao_BD_int = self.BD_int + ao_BD*self.dt
-        self.BD_int = ao_BD_int
-        return ao_BD_int
+        #ao_BD_int = self.BD_int + ao_BD*self.dt
+       # self.BD_int = ao_BD_int
+        #return ao_BD_int
+        
+        tau = 1.2  # 秒，建议先试 1.0~3.0
+        rho = jnp.exp(-self.dt / tau)   # 每步衰减系数
+        self.BD_int = rho * self.BD_int + ao_BD * self.dt
+        return self.BD_int
 
+        leak_near = 0.08   # 近障：慢泄露（保留一点“提前避”）
+        leak_far  = 0.35   # 远离：快泄露（避免“多推一下”）
+
+        near = (ao_delta_xoe < self.mu).astype(jnp.float32)  # (A,O)
+        leak = leak_near * near + leak_far * (1.0 - near)
+
+        # 只在近障积分；远离后不再累加，只快速遗忘
+        self.BD_int = (1.0 - leak) * self.BD_int + near * ao_BD * self.dt
+        return self.BD_int
+    '''
+
+    @ft.partial(jax.jit, static_argnums=(0,))
+    def integrate_BD_update(self,ao_BD: jnp.ndarray,ao_delta_xoe: jnp.ndarray)-> jnp.ndarray:
+        leak_near = 0.08
+        leak_far  = 0.35
+        near = (ao_delta_xoe < self.mu).astype(jnp.float32)  # (A, O)
+        leak = leak_near * near + leak_far * (1.0 - near)
+        self.BD_int = (1.0 - leak) * self.BD_int + near * ao_BD * self.dt
+        return self.BD_int
 
     @ft.partial(jax.jit, static_argnums=(0,))
     def calc_Y_dY_ddY(self, aS_agent_states: AgentState, a_deltaf: jnp.ndarray
@@ -164,11 +189,11 @@ class UFTSTCController:
 
         a_vx = aS_agent_states[:, 2] / 3.6 # metric
 
-        ao_BD, ao_dBD, ao_ddBD = self.calc_BD_dBD_ddBD(aS_agent_states, oS_obst_states)
+        ao_BD, ao_dBD, ao_ddBD,delta_xoe = self.calc_BD_dBD_ddBD(aS_agent_states, oS_obst_states)
         a_BD_sum = ao_BD.sum(axis=1)
         a_dBD_sum = ao_dBD.sum(axis=1)
         a_ddBD_sum = ao_ddBD.sum(axis=1)
-        ao_BD_int = self.integrate_BD_update(ao_BD)
+        ao_BD_int = self.integrate_BD_update(ao_BD,delta_xoe)
         a_BD_int_sum = ao_BD_int.sum(axis=1)
 
         a_Psid_metric = self.k1*jnp.exp(-self.v*a_BD_sum)*a_sgn_Ye/a_vx + self.k2*a_BD_sum*a_Ye/((a_BD_int_sum+1)*a_vx) \
@@ -201,7 +226,7 @@ class UFTSTCController:
     @ft.partial(jax.jit, static_argnums=(0,))
     def nomalize_deltaf(self, a_deltaf:jnp.ndarray) -> jnp.ndarray:
         """处理单位为deg，将[max_deltaf,min_deltaf]区间内的转向角线性映射至[-1,1]区间"""
-        deltaf_center = self.max_deltaf + self.min_deltaf
+        deltaf_center = (self.max_deltaf + self.min_deltaf)/2
         deltaf_half = self.max_deltaf - deltaf_center
         a_normalized_deltaf = (a_deltaf - deltaf_center) / deltaf_half
         return a_normalized_deltaf
