@@ -38,7 +38,7 @@ class MVELaneChangeAndOverTake(MVE):
         "ego_m": 940., # kg
         "ego_Iz": 752.25333, # kg*m^2，假设质心位于几何中心
         "ego_Cf": 47850., # N/rad
-        "ego_Cr": 46510., # N/rad
+        "ego_Cr": 46510., # N/rad00
         "comm_radius": 100,
         "obst_bb_size": jnp.array([4., 2.]), # bounding box的[width, height] m
 
