@@ -134,7 +134,10 @@ class ActionNode(Node):
         self.act_fn = jax.jit(act_fn)
 
         z_fn = algo.get_opt_z if hasattr(algo, "get_opt_z") else None
-        self.z_fn = jax.jit(z_fn)
+        if z_fn is not None:
+            self.z_fn = jax.jit(z_fn)
+        else:
+            self.z_fn = z_fn
 
         init_rnn_state = algo.init_rnn_state
         if hasattr(algo, "init_Vh_rnn_state"):

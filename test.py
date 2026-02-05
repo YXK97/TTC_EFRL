@@ -111,7 +111,7 @@ def test(args):
         init_Vh_rnn_state = None
 
     test_key = jr.PRNGKey(args.seed)
-    test_keys = jr.split(test_key, 1_000)[: args.epi]
+    test_keys = jr.split(test_key, args.epi)
     test_keys = test_keys[args.offset:]
 
     rollout_fn = ft.partial(eval_rollout,

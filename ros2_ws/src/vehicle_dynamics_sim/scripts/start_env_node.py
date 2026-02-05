@@ -159,12 +159,12 @@ class EnvNode(Node):
         cost = float(np.max(a_cost))
         cost_real = float(np.max(a_cost_real))
         # step后发布eval到/ros_env/eval
-        self.publish_eval(reward, cost, a)
+        self.publish_eval(reward, cost, cost_real)
         # 更新状态和步数
         self.current_step += 1
         self.current_graph = next_graph
         self.get_logger().info(
-            f'Executed step {self.current_step}/{self.env.max_episode_steps}, reward: {reward:.2f}, cost: {cost:.2f}')
+            f'Executed step {self.current_step}/{self.env.max_episode_steps}, reward: {reward:.2f}, cost: {cost_real:.2f}')
         # 同步现实时间（补足时延）
         step_elapsed = time.time() - step_start
         if step_elapsed < self.env.dt:

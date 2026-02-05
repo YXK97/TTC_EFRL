@@ -232,7 +232,6 @@ class LaneChangeMiddleStaticEdgeFastMoving(LaneChangeANDOvertakeScene):
     def make(self) -> Tuple[AgentState, ObstState, PathRefs, jnp.ndarray]:
         start_x_key, terminal_x_key, start_y_key, start_terminal_vx_key, agent_x_key, agent_y_key, agent_vx_key, \
             sobst_y_key, sobst_theta_key, mobst_x_key, mobst_y_key, mobst_vx_key = jr.split(self.key, 12)
-        num_lanes = self.num_lanes
 
         # 生成轨迹
         start_x = jr.uniform(start_x_key, shape=(), dtype=jnp.float32, minval=self.xrange[0],
@@ -250,10 +249,11 @@ class LaneChangeMiddleStaticEdgeFastMoving(LaneChangeANDOvertakeScene):
         anS_goals, an4_dsYddts = generate_lanechange_path_points(self.xrange, self.num_agents, self.num_ref_points,
                                                                  S_start_state, S_terminal_state)
 
-        # 生成初始agent，x坐标都一样，y和vx可不一样，其它的都是0
+        # 生成初始agent，x坐标都一样，y坐标可略有上下波动，vx可不一样，其它的都是0
         agent_x = jr.uniform(agent_x_key, shape=(), dtype=jnp.float32, minval=self.xrange[0], maxval=start_x)
         a_agent_x = jnp.repeat(agent_x[None], self.num_agents, axis=0) # 变道前同一x
-        a_agent_y = jr.choice(agent_y_key, self.lane_centers, shape=(self.num_agents,)) # 几根车道中选
+        a_agent_y = jnp.repeat(start_y[None], self.num_agents, axis=0) + jr.uniform(agent_y_key, shape=(self.num_agents,),
+            dtype=jnp.float32, minval=-0.1, maxval=0.1)
         a_agent_vx = jr.uniform(agent_vx_key, shape=(self.num_agents,), dtype=jnp.float32,
                                 minval=60, maxval=90) # 60 ~ 90 km/h
         aSm3_other0 = jnp.repeat(Sm3_other0[None, :], self.num_agents, axis=0)
@@ -332,10 +332,11 @@ class LaneChangeMiddleStaticEdgeSlowMoving(LaneChangeANDOvertakeScene):
         anS_goals, an4_dsYddts = generate_lanechange_path_points(self.xrange, self.num_agents, self.num_ref_points,
                                                                  S_start_state, S_terminal_state)
 
-        # 生成初始agent，x坐标都一样，y和vx可不一样，其它的都是0
+        # 生成初始agent，x坐标都一样，y坐标可略有上下波动，vx可不一样，其它的都是0
         agent_x = jr.uniform(agent_x_key, shape=(), dtype=jnp.float32, minval=self.xrange[0], maxval=start_x)
         a_agent_x = jnp.repeat(agent_x[None], self.num_agents, axis=0) # 变道前同一x
-        a_agent_y = jr.choice(agent_y_key, self.lane_centers, shape=(self.num_agents,)) # 几根车道中选
+        a_agent_y = jnp.repeat(start_y[None], self.num_agents, axis=0) \
+            +jr.uniform(agent_y_key, shape=(self.num_agents,), dtype=jnp.float32, minval=-0.1, maxval=0.1)
         a_agent_vx = jr.uniform(agent_vx_key, shape=(self.num_agents,), dtype=jnp.float32,
                                 minval=60, maxval=90) # 60 ~ 90 km/h
         aSm3_other0 = jnp.repeat(Sm3_other0[None, :], self.num_agents, axis=0)
@@ -415,10 +416,11 @@ class LaneChangeEdgeStaticMiddleFastMoving(LaneChangeANDOvertakeScene):
         anS_goals, an4_dsYddts = generate_lanechange_path_points(self.xrange, self.num_agents, self.num_ref_points,
                                                                  S_start_state, S_terminal_state)
 
-        # 生成初始agent，x坐标都一样，y和vx可不一样，其它的都是0
+        # 生成初始agent，x坐标都一样，y坐标可略有上下波动，vx可不一样，其它的都是0
         agent_x = jr.uniform(agent_x_key, shape=(), dtype=jnp.float32, minval=self.xrange[0], maxval=start_x)
         a_agent_x = jnp.repeat(agent_x[None], self.num_agents, axis=0)  # 变道前同一x
-        a_agent_y = jr.choice(agent_y_key, self.lane_centers, shape=(self.num_agents,))  # 几根车道中选
+        a_agent_y = jnp.repeat(start_y[None], self.num_agents, axis=0) \
+            + jr.uniform(agent_y_key, shape=(self.num_agents,), dtype=jnp.float32, minval=-0.1, maxval=0.1)  # 中心在中间车道
         a_agent_vx = jr.uniform(agent_vx_key, shape=(self.num_agents,), dtype=jnp.float32,
                                 minval=60, maxval=90)  # 60 ~ 90 km/h
         aSm3_other0 = jnp.repeat(Sm3_other0[None, :], self.num_agents, axis=0)
@@ -499,10 +501,11 @@ class LaneChangeEdgeStaticMiddleSlowMoving(LaneChangeANDOvertakeScene):
         anS_goals, an4_dsYddts = generate_lanechange_path_points(self.xrange, self.num_agents, self.num_ref_points,
                                                                  S_start_state, S_terminal_state)
 
-        # 生成初始agent，x坐标都一样，y和vx可不一样，其它的都是0
+        # 生成初始agent，x坐标都一样，y坐标可略有上下波动，vx可不一样，其它的都是0
         agent_x = jr.uniform(agent_x_key, shape=(), dtype=jnp.float32, minval=self.xrange[0], maxval=start_x)
         a_agent_x = jnp.repeat(agent_x[None], self.num_agents, axis=0)  # 变道前同一x
-        a_agent_y = jr.choice(agent_y_key, self.lane_centers, shape=(self.num_agents,))  # 几根车道中选
+        a_agent_y = jnp.repeat(start_y[None], self.num_agents, axis=0) \
+            + jr.uniform(agent_y_key, shape=(self.num_agents,), dtype=jnp.float32, minval=-0.1, maxval=0.1)
         a_agent_vx = jr.uniform(agent_vx_key, shape=(self.num_agents,), dtype=jnp.float32,
                                 minval=60, maxval=90)  # 60 ~ 90 km/h
         aSm3_other0 = jnp.repeat(Sm3_other0[None, :], self.num_agents, axis=0)
@@ -563,9 +566,8 @@ class OvertakeEdgeStaticMiddleFastMoving(LaneChangeANDOvertakeScene):
         return 1
 
     def make(self) -> Tuple[AgentState, ObstState, PathRefs, jnp.ndarray]:
-        start_x_key, terminal_x_key, start_y_key, start_terminal_vx_key, agent_x_key, agent_vx_key, \
-            sobst_y_key, sobst_theta_key, mobst_x_key, mobst_y_key, mobst_vx_key = jr.split(self.key, 11)
-        num_lanes = self.num_lanes
+        start_x_key, terminal_x_key, start_y_key, start_terminal_vx_key, agent_x_key, agent_y_key, agent_vx_key, \
+            sobst_y_key, sobst_theta_key, mobst_x_key, mobst_y_key, mobst_vx_key = jr.split(self.key, 12)
 
         # 生成轨迹
         start_x = jr.uniform(start_x_key, shape=(), dtype=jnp.float32, minval=self.xrange[0],
@@ -580,10 +582,11 @@ class OvertakeEdgeStaticMiddleFastMoving(LaneChangeANDOvertakeScene):
         anS_goals, an4_dsYddts = generate_horizontal_path_points(self.xrange, self.num_agents, self.num_ref_points,
                                                                  start_y, terminal_vx)
 
-        # 生成初始agent，x和y坐标都一样，vx可不一样，其它的都是0
+        # 生成初始agent，x坐标都一样，y坐标可略有上下波动，vx可不一样，其它的都是0
         agent_x = jr.uniform(agent_x_key, shape=(), dtype=jnp.float32, minval=self.xrange[0], maxval=start_x)
         a_agent_x = jnp.repeat(agent_x[None], self.num_agents, axis=0)  # 变道前同一x
-        a_agent_y = jnp.repeat(start_y[None], self.num_agents, axis=0)
+        a_agent_y = jnp.repeat(start_y[None], self.num_agents, axis=0) \
+            + jr.uniform(agent_y_key, shape=(self.num_agents,), dtype=jnp.float32, minval=-0.1, maxval=0.1)
         a_agent_vx = jr.uniform(agent_vx_key, shape=(self.num_agents,), dtype=jnp.float32,
                                 minval=60, maxval=90)  # 60 ~ 90 km/h
         aSm3_other0 = jnp.repeat(Sm3_other0[None, :], self.num_agents, axis=0)
@@ -644,9 +647,8 @@ class OvertakeEdgeStaticMiddleSlowMoving(LaneChangeANDOvertakeScene):
         return 1
 
     def make(self) -> Tuple[AgentState, ObstState, PathRefs, jnp.ndarray]:
-        start_x_key, terminal_x_key, start_y_key, start_terminal_vx_key, agent_x_key, agent_vx_key, \
-            sobst_y_key, sobst_theta_key, mobst_x_key, mobst_y_key, mobst_vx_key = jr.split(self.key, 11)
-        num_lanes = self.num_lanes
+        start_x_key, terminal_x_key, start_y_key, start_terminal_vx_key, agent_x_key, agent_y_key, agent_vx_key, \
+            sobst_y_key, sobst_theta_key, mobst_x_key, mobst_y_key, mobst_vx_key = jr.split(self.key, 12)
 
         # 生成轨迹
         start_x = jr.uniform(start_x_key, shape=(), dtype=jnp.float32, minval=self.xrange[0],
@@ -661,10 +663,11 @@ class OvertakeEdgeStaticMiddleSlowMoving(LaneChangeANDOvertakeScene):
         anS_goals, an4_dsYddts = generate_horizontal_path_points(self.xrange, self.num_agents, self.num_ref_points,
                                                                  start_y, terminal_vx)
 
-        # 生成初始agent，x和y坐标都一样，vx可不一样，其它的都是0
+        # 生成初始agent，x坐标都一样，y坐标可略有上下波动，vx可不一样，其它的都是0
         agent_x = jr.uniform(agent_x_key, shape=(), dtype=jnp.float32, minval=self.xrange[0], maxval=start_x)
         a_agent_x = jnp.repeat(agent_x[None], self.num_agents, axis=0)  # 变道前同一x
-        a_agent_y = jnp.repeat(start_y[None], self.num_agents, axis=0)
+        a_agent_y = jnp.repeat(start_y[None], self.num_agents, axis=0) \
+            + jr.uniform(agent_y_key, shape=(self.num_agents,), dtype=jnp.float32, minval=-0.1, maxval=0.1)
         a_agent_vx = jr.uniform(agent_vx_key, shape=(self.num_agents,), dtype=jnp.float32,
                                 minval=60, maxval=90)  # 60 ~ 90 km/h
         aSm3_other0 = jnp.repeat(Sm3_other0[None, :], self.num_agents, axis=0)
