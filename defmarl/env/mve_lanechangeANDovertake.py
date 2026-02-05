@@ -5,6 +5,8 @@ import jax.numpy as jnp
 import functools as ft
 import numpy as np
 
+import os
+
 from typing import Optional, Tuple, List
 from typing_extensions import override
 from matplotlib import pyplot as plt
@@ -16,14 +18,16 @@ from matplotlib.patches import FancyArrow
 from .mve import MVE, MVEEnvState, MVEEnvGraphsTuple
 from .designed_scene_gen import gen_scene_randomly, gen_handmade_scene
 from .utils import process_lane_centers, process_lane_marks, relative_state
-from defmarl.trainer.data import Rollout
+from defmarl.trainer.data import Rollout, Record
 from defmarl.utils.graph import EdgeBlock, GetGraph, GraphsTuple
 from defmarl.utils.typing import Action, Reward, Cost, Array, State, AgentState, ObstState, Done, Info
 from defmarl.utils.utils import tree_index, MutablePatchCollection, save_anim, calc_2d_rot_matrix, \
     find_closest_goal_indices, gen_i_j_pairs, gen_i_j_pairs_no_identical, normalize_angle
 from ..utils.scaling import scaling_calc, scaling_calc_bound
 
+
 INF = jnp.inf
+
 
 class MVELaneChangeAndOverTake(MVE):
     """该任务使用agent位姿和预设轨迹的偏移量、加减速度和方向盘转角的大小作为的reward的度量，
@@ -802,7 +806,7 @@ class MVELaneChangeAndOverTake(MVE):
     def unsafe_mask(self, graph: GraphsTuple) -> Array:
         _, cost_real = self.get_cost(graph)
         return jnp.any(cost_real >= 0.0, axis=-1)
-
+    '''
     def plot_agent_speed_from_rollout(self, rollout: Rollout, save_path=None, use_body_frame=False):
         """
         绘制 agent 速度图
@@ -859,3 +863,107 @@ class MVELaneChangeAndOverTake(MVE):
             plt.close(fig)
         else:
             plt.show()
+'''
+
+    def plot_agent_speed_from_rollout(self, rollout: Rollout, record: Record, save_path=None, use_body_frame=False):
+        """
+        绘制 agent 速度图和 Psid_metric（与 Psi 在同一个图中）
+        :param rollout: 一个包含图数据的 Rollout 对象
+        :param a_Psid_metric: Psid_metric 数据
+        :param save_path: 如果传入路径，就保存为 png 文件，否则直接显示
+        :param use_body_frame: 是否使用车身坐标系进行速度转换
+        """
+        T = len(rollout.graph.n_node)  # 时间步数
+        A = self.num_agents  # 从类的实例获取 agent 数量
+        vx_TA = np.zeros((T, A), dtype=np.float32)
+        vy_TA = np.zeros((T, A), dtype=np.float32)
+        x_T = np.zeros(T, dtype=np.float32)  # 世界坐标系下的 X 位置
+        psi_T = np.zeros((T, A), dtype=np.float32)  # 每个 agent 的转角
+        a_Psid_metric = record.Psid
+        ao_BD= record.ao_BD
+        a_deltaf=record.deltaf*7
+        BD_lane=record.BD_lane
+        a_Ye=record.a_Ye
+        # 遍历所有时间步，提取速度和位置信息
+        for t in range(T):
+            g = tree_index(rollout.graph, t)
+
+            # 提取速度（vx 和 vy）
+            vx = np.array(g.states[:A, 2])
+            vy = np.array(g.states[:A, 3])
+
+            # 提取位置（X 和 Psi）
+            x = np.array(g.states[:A, 0])  # X 位置
+            psi_deg = np.array(g.states[:A, 4])  # 转角 Psi (单位: 度)
+
+            x_T[t] = np.mean(x)  # 取所有 agent 的平均位置作为该时间步的横坐标
+            psi_T[t] = psi_deg  # 存储转角
+
+            if use_body_frame:
+                # 转换到车身坐标系
+                theta = psi_deg * np.pi / 180.0
+                c, s = np.cos(theta), np.sin(theta)
+                vbx = c * vx + s * vy
+                vby = -s * vx + c * vy
+                vx, vy = vbx, vby
+
+            # 存储速度
+            vx_TA[t] = vx
+            vy_TA[t] = vy
+
+        # 计算总速度
+        speed_TA = np.sqrt(vx_TA**2 + vy_TA**2)  # km/h
+        time = x_T  # 使用世界坐标系下的 X 作为时间轴
+
+        # 绘制图形
+        fig, axes = plt.subplots(6, 1, figsize=(10, 10), sharex=True)
+
+        for a in range(A):
+            axes[0].plot(time, vx_TA[:, a], label=f"agent{a}")
+        axes[0].set_ylabel("vx (km/h)")
+        axes[0].legend(ncol=4, fontsize=8)
+
+        for a in range(A):
+            axes[1].plot(time, vy_TA[:, a], label=f"agent{a}")
+        axes[1].set_ylabel("vy (km/h)")
+
+        for a in range(A):
+            axes[2].plot(time, a_Ye[:, a], label=f"a_Ye")
+        axes[2].set_ylabel("a_Ye")
+
+        # 绘制转角和 Psid_metric 图
+        for a in range(A):
+            axes[3].plot(time, psi_T[:, a], label=f"agent{a} - Psi", linestyle='--')
+            axes[3].plot(time, a_Psid_metric[:, a], label=f"agent{a} - Psid_metric", linestyle='-')
+           # axes[3].plot(time, YD_deta[:, a], label=f"agent{a} - YD_deta", linestyle='-.')
+        axes[3].set_ylabel("Psi (degrees) / Psid_metric")
+        axes[3].set_xlabel("World X Position (m)")
+
+        for a in range(A):
+
+            axes[4].plot(time, a_deltaf[:, a], label=f"deltaf", linestyle='-')
+        # axes[3].plot(time, YD_deta[:, a], label=f"agent{a} - YD_deta", linestyle='-.')
+        axes[4].set_ylabel("Psi (degrees) / Psid_metric")
+        axes[4].set_xlabel("World X Position (m)")
+
+        for a in range(A):
+            #axes[4].plot(time, ao_BD[:, a], label=f"ao_BD")
+            axes[5].plot(time, ao_BD[:, a], label=f"ao_BD")
+            axes[5].plot(time, BD_lane[:,a], label=f"ao_BD")
+           # axes[5].plot(time, a_Ye[:,a], label=f"a_ye")
+        # axes[3].plot(time, YD_deta[:, a], label=f"agent{a} - YD_deta", linestyle='-.')
+        axes[5].set_ylabel("Psi (degrees) / Psid_metric")
+        axes[5].set_xlabel("World X Position (m)")
+
+        title = "Agent speed (body frame)" if use_body_frame else "Agent speed (world frame)"
+        fig.suptitle(title)
+        fig.tight_layout()
+
+        # 保存图像或展示
+        if save_path is not None:
+            plt.savefig(save_path, dpi=150)
+            plt.close(fig)
+        else:
+            plt.show()
+
+

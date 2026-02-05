@@ -1,6 +1,7 @@
 import jax
 import jax.numpy as jnp
 import functools as ft
+from typing import Tuple
 
 from defmarl.env.mve import MVE
 from defmarl.utils.utils import calc_2d_rot_matrix
@@ -101,10 +102,10 @@ class PIDController:
 
 
     @ft.partial(jax.jit, static_argnums=(0,))
-    def calc_ax(self, graph: GraphsTuple) -> jnp.ndarray:
+    def calc_ax(self, graph: GraphsTuple) -> Tuple[jnp.ndarray, jnp.ndarray]:
         a_vx_error = self.vx_error_in_body_fixed_coordinates(graph) # km/h
         a_ax = self.pid_acceleration(a_vx_error)
         a_ax_clip = self.clip_ax(a_ax) # m/s^2
         #a_ax_clip = jnp.zeros_like(a_ax_clip)
         a_ax_normalize = self.normalize_ax(a_ax_clip)
-        return a_ax_normalize
+        return a_ax_normalize ,  a_ax_clip

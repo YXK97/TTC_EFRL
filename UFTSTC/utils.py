@@ -2,10 +2,13 @@ import jax
 import jax.numpy as jnp
 
 from UFTSTC.longitudinal_controller import PIDController
-from UFTSTC.latral_controller import UFTSTCController
+#from UFTSTC.latral_controller import UFTSTCController
+from UFTSTC.latral_controller_pid import UFTSTCController_pid
 from defmarl.env import MultiAgentEnv
 from defmarl.utils.typing import PRNGKey
-from defmarl.trainer.data import Rollout
+from defmarl.trainer.data import Rollout, Record
+
+
 
 
 def parse_uftstc_controller_args(args, env: MultiAgentEnv) -> dict:
@@ -21,7 +24,19 @@ def parse_uftstc_controller_args(args, env: MultiAgentEnv) -> dict:
                     "p_den": args.p_den, "alpha": args.alpha,
                     "Cf": env.params["ego_Cf"], "Cr": env.params["ego_Cr"], "Lf": env.params["ego_lf"],
                     "Lr": env.params["ego_lr"], "m": env.params["ego_m"], "Iz": env.params["ego_Iz"],
-                    "max_deltaf": action_upper_limit[:,1], "min_deltaf": action_lower_limit[:,1]}
+                    "max_deltaf": action_upper_limit[:,1], "min_deltaf": action_lower_limit[:,1],  "y_min": args.y_min,         # 传递左边界 y
+                           "y_max": args.y_max,         # 传递右边界 y
+                           "Af_lane": args.Af_lane,     # Lane parameters
+                           "r_lane": args.r_lane,
+                           "mu_lane": args.mu_lane,
+                           "c_lane": args.c_lane,
+                           "leak_near_lane": args.leak_near_lane,
+                           "leak_far_lane": args.leak_far_lane,
+                           "kp_d": args.kp_d,
+                           "ki_d": args.ki_d,
+                           "kd_d": args.kd_d,
+                           "max_integral_d": args.max_integral_d,
+                           "min_integral_d": args.min_integral_d}
     return uftstc_control_args
 
 
@@ -38,7 +53,8 @@ def parse_pid_controller_args(args, env: MultiAgentEnv) -> dict:
 
 def eval_rollout_uftstc(
         env: MultiAgentEnv,
-        lateral_controller: UFTSTCController,
+        #lateral_controller: UFTSTCController,
+        lateral_controller_pid: UFTSTCController_pid,
         longitudinal_controller: PIDController,
         key: PRNGKey,
 ):
@@ -46,22 +62,28 @@ def eval_rollout_uftstc(
 
     def body(data, xs):
         graph, dsYddt = data
-        a_deltaf = lateral_controller.calc_deltaf(graph, dsYddt)
-        a_ax = longitudinal_controller.calc_ax(graph)
+        a_deltaf, a_Psid_metric, ao_BD ,BD_lane, a_Ye ,aS_agent_states , oS_obst_states , a_Yd , deltaf_clip_deg , T_goal_states= lateral_controller_pid.calc_deltaf(graph, dsYddt)
+        a_ax , a_ax_clip = longitudinal_controller.calc_ax(graph)
+
+
 
         # debug
         zeros = jnp.zeros_like(a_ax)
         #action = jnp.stack([a_ax, zeros], axis=1)
 
         action = jnp.stack([a_ax, a_deltaf], axis=1)
+        action_sum = jnp.stack([a_ax_clip, deltaf_clip_deg], axis=1)
         next_graph, next_dsYddt, reward, cost, cost_real, done, info = env.step(graph, action)
         return ((next_graph, next_dsYddt),
-                (graph, action, None, reward, cost, cost_real, done, None, next_graph, dsYddt))
+                (graph, action, action_sum, None, reward, cost, cost_real, done, None, next_graph, dsYddt, \
+                 a_ax, a_deltaf, a_Psid_metric, ao_BD, BD_lane, a_Ye ,aS_agent_states , oS_obst_states , a_Yd , T_goal_states))
 
-    _, (graphs, actions, rnn_states, rewards, costs, costs_real, dones, log_pis, next_graphs, dsYddts) = (
+    _, (graphs, actions , action_sums , rnn_states, rewards, costs, costs_real, dones, log_pis, next_graphs, dsYddts, \
+        a_axs, a_deltafs, a_Psid_metrics, ao_BDs, BD_lanes, a_Yes, aS_agent_statess , oS_obst_statess , a_Yds , T_goal_statess) = (
         jax.lax.scan(body,
                      (init_graph, init_dsYddt),
                      None,
                      length=env.max_episode_steps))
     rollout_data = Rollout(graphs, actions, rnn_states, rewards, costs, costs_real, dones, log_pis, next_graphs, dsYddts)
-    return rollout_data
+    record_data = Record(a_axs, a_deltafs, a_Psid_metrics,ao_BDs,BD_lanes, a_Yes,aS_agent_statess , oS_obst_statess , a_Yds , action_sums , T_goal_statess)
+    return rollout_data, record_data

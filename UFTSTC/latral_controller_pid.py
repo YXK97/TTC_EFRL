@@ -11,7 +11,7 @@ from defmarl.utils.typing import AgentState, ObstState, Action
 from defmarl.utils.utils import nthroot
 from defmarl.utils.graph import GraphsTuple
 
-class UFTSTCController:
+class UFTSTCController_pid:
     """使用LvChen论文里的UFTSTC算法计算前轮转角控制量，去掉了转角上限估计器，改为直接对转角求饱和函数
     state: X(m) Y(m) vx(km/h) vy(km/h) Psi(deg) dPsi(gamma)(deg/s) bw(m) bh(m)
     action: ax(=0)(m/s^2) deltaf(deg/s)"""
@@ -36,7 +36,7 @@ class UFTSTCController:
                  leak_far_lane: float = 0.35,
                  k_lane_violate: float = 100.0,
 
-    ):
+                 ):
         # 环境参数设置
         self.num_agents = num_agents
         self.num_obsts = num_obsts
@@ -101,6 +101,8 @@ class UFTSTCController:
                                   ) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
         a2_agent_pos = aS_agent_states[:, :2]
         o2_obst_pos = oS_obst_states[:, :2]
+        o2_obst_pos_y = oS_obst_states[:,1]
+        yy=o2_obst_pos_y
         # distance between agents and obstacles
         ao_delta_xoe = jnp.linalg.norm(jnp.expand_dims(a2_agent_pos, 1) - jnp.expand_dims(o2_obst_pos, 0), axis=-1)
         ao_delta_dxoe = (ao_delta_xoe - self.delta_xoe) / self.dt
@@ -118,23 +120,23 @@ class UFTSTCController:
         dist_ratio = jnp.clip((delta_xoe - self.r) / (self.mu - self.r), 0, 1)
         dist_ratio_pow = dist_ratio**(2*self.c)
         ao_Uod = jnp.where(delta_xoe > self.mu, 0,
-                    jnp.where(delta_xoe > self.r,
-                        self.Af*jnp.cos(jnp.pi/2 * dist_ratio_pow),
-                        self.Af))
+                           jnp.where(delta_xoe > self.r,
+                                     self.Af*jnp.cos(jnp.pi/2 * dist_ratio_pow),
+                                     self.Af))
         ao_dUod = jnp.where(delta_xoe > self.mu, 0,
-                    jnp.where(delta_xoe > self.r,
-                        -self.Af*jnp.sin(jnp.pi/2 * dist_ratio_pow) * \
-                        jnp.pi*self.c*delta_dxoe * dist_ratio_pow  / (delta_xoe-self.r),
-                        0))
+                            jnp.where(delta_xoe > self.r,
+                                      -self.Af*jnp.sin(jnp.pi/2 * dist_ratio_pow) * \
+                                      jnp.pi*self.c*delta_dxoe * dist_ratio_pow  / (delta_xoe-self.r),
+                                      0))
         ao_ddUod = jnp.where(delta_xoe > self.mu, 0,
-                    jnp.where(delta_xoe > self.r,
-                        -self.Af*jnp.cos(jnp.pi/2 * dist_ratio_pow) * \
-                        jnp.pi**2 * self.c**2 * delta_dxoe**2 * dist_ratio**(4*self.c) / (delta_xoe-self.r)**2 \
-                        -self.Af*jnp.sin(jnp.pi/2 * dist_ratio_pow) * \
-                        jnp.pi * self.c * \
-                        ((2*self.c-1) * delta_dxoe**2 * dist_ratio_pow / (delta_xoe-self.r)**2 \
-                        +delta_ddxoe * dist_ratio_pow / (delta_xoe-self.r)),
-                        0))
+                             jnp.where(delta_xoe > self.r,
+                                       -self.Af*jnp.cos(jnp.pi/2 * dist_ratio_pow) * \
+                                       jnp.pi**2 * self.c**2 * delta_dxoe**2 * dist_ratio**(4*self.c) / (delta_xoe-self.r)**2 \
+                                       -self.Af*jnp.sin(jnp.pi/2 * dist_ratio_pow) * \
+                                       jnp.pi * self.c * \
+                                       ((2*self.c-1) * delta_dxoe**2 * dist_ratio_pow / (delta_xoe-self.r)**2 \
+                                        +delta_ddxoe * dist_ratio_pow / (delta_xoe-self.r)),
+                                       0))
         return ao_Uod, ao_dUod, ao_ddUod
 
     @ft.partial(jax.jit, static_argnums=(0,))
@@ -148,8 +150,8 @@ class UFTSTCController:
         ao_ddBD = 2 * (dUod**2 + Uod*ddUod) / (self.Af**2 - Uod**2 + eps) + 4 * Uod**2 * dUod**2 / ((self.Af**2 - Uod**2)**2 + eps)
 
         # debug
-        ao_mask = jnp.zeros_like(ao_BD)
-        ao_mask = ao_mask.at[:, 0].set(jnp.ones((ao_BD.shape[0],)))
+        ao_mask = jnp.ones_like(ao_BD)
+        #ao_mask = ao_mask.at[:, 0].set(jnp.zeross((ao_BD.shape[0],)))
         ao_BD = ao_BD * ao_mask
         ao_dBD = ao_dBD * ao_mask
         ao_ddBD = ao_ddBD * ao_mask
@@ -283,7 +285,7 @@ class UFTSTCController:
         a_deltaf = a_deltaf * jnp.pi/180 # metric
 
         a_dvy = (self.Cf+self.Cr)*a_vy / (self.m*a_vx) - self.Cf * a_deltaf / self.m \
-            + ((self.Lf*self.Cf - self.Lr*self.Cr)/(self.m*a_vx) - a_vx)*a_gamma
+                + ((self.Lf*self.Cf - self.Lr*self.Cr)/(self.m*a_vx) - a_vx)*a_gamma
         a_dY = a_vx * a_Psi + a_vy
         a_ddy = a_vx * a_gamma + a_dvy
 
@@ -292,7 +294,7 @@ class UFTSTCController:
 
     @ft.partial(jax.jit, static_argnums=(0,))
     def calc_beta_dbeta_ddbeta_metric(self, aS_agent_states: AgentState, a_deltaf: jnp.ndarray
-                               ) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+                                      ) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
         a_vx = aS_agent_states[:, 2] / 3.6 # metric
         a_vy = aS_agent_states[:, 3] / 3.6 # metric
         a_dPsi = a_gamma = aS_agent_states[:, 5] * jnp.pi/180 # metric
@@ -310,7 +312,20 @@ class UFTSTCController:
     @ft.partial(jax.jit, static_argnums=(0,))
     def calc_Psid_dPsid_ddPsid_metric(self, aS_agent_states: AgentState, oS_obst_states: ObstState, a_deltaf: jnp.ndarray,
                                       a_Yd: jnp.ndarray, a_dYd: jnp.ndarray, a_ddYd: jnp.ndarray, a_dddYd: jnp.ndarray
-                                      ) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray,jnp.ndarray, jnp.ndarray]:
+                                      ) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+        # 计算每个障碍物与agent的误差，静态，动态，下边界，上边界
+        A = aS_agent_states.shape[0]
+        N = oS_obst_states.shape[0]
+        Y = aS_agent_states[:, 1:2]
+        obs_y = oS_obst_states[:, 1]
+
+        lane_y = jnp.array([self.y_min, self.y_max], dtype=obs_y.dtype)
+        Y0 = jnp.concatenate([obs_y, lane_y], axis=0)  # (O,)
+        Y0_AO = jnp.broadcast_to(Y0[None, :], (A, N + 2))   # (A,O)
+        Y_AO  = jnp.broadcast_to(Y,          (A, N + 2))    # (A,O)
+        ao_bar_Ye = Y0_AO - Y_AO          # (A,O)
+        ao_bar_sgn_Ye=jnp.sign(ao_bar_Ye)
+
         a_Y, a_dY, a_ddY = self.calc_Y_dY_ddY(aS_agent_states, a_deltaf)
         a_Ye = a_Yd - a_Y
         a_sgn_Ye = jnp.sign(a_Ye)
@@ -323,8 +338,16 @@ class UFTSTCController:
 
         ao_BD, ao_dBD, ao_ddBD,delta_xoe= self.calc_BD_dBD_ddBD(aS_agent_states, oS_obst_states)
         BD_lane, dBD_lane, ddBD_lane, d_lane,Uod = self.calc_lane_BD_terms(a_Y, a_dY, a_ddY)
+
+        #边界
+        BD_AO = jnp.concatenate([ao_BD, BD_lane], axis=1)
+
+        # [静态车, 动态车, y_min边界, y_max边界]
+        w = jnp.array([0.7,0.5, 2.5, 1], dtype=BD_AO.dtype)  #
+        BD_weighted_sum = jnp.sum(BD_AO * ao_bar_sgn_Ye * w[None, :], axis=1)
+
         weight_obstacle = 1
-        weight_lane = 0
+        weight_lane = 1
         a_BD_sum = (weight_obstacle * ao_BD.sum(axis=1)) + (weight_lane * BD_lane.sum(axis=1))
         a_dBD_sum = (weight_obstacle * ao_dBD.sum(axis=1)) + (weight_lane * dBD_lane.sum(axis=1))
         a_ddBD_sum = (weight_obstacle * ao_ddBD.sum(axis=1)) + (weight_lane * ddBD_lane.sum(axis=1))
@@ -334,17 +357,10 @@ class UFTSTCController:
         # ===== [ADD] lane boundary terms =====
         # a_BD_int_sum = a_BD_int_sum + a_BD_int_sum_lane
 
-        a_Psid_metric = self.k1*jnp.exp(-self.v*a_BD_sum)*a_sgn_Ye/a_vx - self.k2*a_BD_sum*a_Ye/((a_BD_int_sum+1)*a_vx) \
-            +a_dYd/a_vx*0.6 - a_beta*0.1
-        a_dPsid_metric = -self.k1 * self.v * jnp.exp(-self.v*a_BD_sum) * a_dBD_sum * a_sgn_Ye / a_vx \
-            -self.k2 * (a_dBD_sum * a_Ye + a_BD_sum * a_dYe) / ((a_BD_int_sum + 1) * a_vx) \
-            +self.k2 * a_BD_sum**2 * a_Ye / ((a_BD_int_sum + 1)**2 * a_vx) \
-            +a_ddYd / a_vx*0.6- a_dbeta*0.1
-        a_ddPsid_metric = self.k1 * self.v * jnp.exp(-self.v*a_BD_sum) * (self.v*a_dBD_sum**2-a_ddBD_sum) * a_sgn_Ye / a_vx \
-            -self.k2 * (a_ddBD_sum*a_Ye+2*a_dBD_sum*a_dYe+a_BD_sum*a_ddYe) / ((a_BD_int_sum + 1) * a_vx) \
-            +self.k2 * (3*a_BD_sum*a_dBD_sum*a_Ye+2*a_BD_sum**2*a_Ye) / ((a_BD_int_sum + 1)**2 * a_vx) \
-            -2 * self.k2 * a_BD_sum**3 * a_Ye / ((a_BD_int_sum + 1)**3 * a_vx)\
-            +a_dddYd / a_vx* 0.6- a_ddbeta*0.1
+        # a_Psid_metric = self.k1*jnp.exp(-self.v*a_BD_sum)*a_Ye/a_vx - self.k2*a_BD_sum*a_sgn_Ye/((a_BD_int_sum+1)*a_vx) \
+        #               +a_dYd/a_vx*0.6 - a_beta*0.1
+        a_Psid_metric = self.k1*jnp.exp(-self.v*a_BD_sum)*a_Ye/a_vx - self.k2*BD_weighted_sum/((a_BD_int_sum+1)*a_vx) \
+                       *0 +a_dYd/a_vx*0.999 - a_beta*0
         a_Psid_metric=jnp.clip(a_Psid_metric,-jnp.pi/2, jnp.pi/2)
         self.cur_step += 1
         jax.debug.print("step:{cur_step} \n"
@@ -359,7 +375,7 @@ class UFTSTCController:
                         bd_lane=BD_lane,
                         Uod=Uod)
 
-        return a_Psid_metric, a_dPsid_metric, a_ddPsid_metric,ao_BD, BD_lane ,a_Ye
+        return a_Psid_metric,ao_BD, BD_lane ,a_Ye
 
 
     @ft.partial(jax.jit, static_argnums=(0,))
@@ -384,61 +400,19 @@ class UFTSTCController:
 
 
     @ft.partial(jax.jit, static_argnums=(0,))
-    def calc_deltaf_sliding(self, graph: GraphsTuple, a4_dsYddt: jnp.ndarray) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray,jnp.ndarray, jnp.ndarray]:
-        aS_agent_states = graph.type_states(MVE.AGENT, n_type=self.num_agents)
-        oS_obst_states = graph.type_states(MVE.OBST, n_type=self.num_obsts)
-        a_Yd = a4_dsYddt[:, 0]
-        a_dYd = a4_dsYddt[:, 1]
-        a_ddYd = a4_dsYddt[:, 2]
-        a_dddYd = a4_dsYddt[:, 3]
-
-        a_Psid_metric, a_dPsid_metric, a_ddPsid_metric , ao_BD, BD_lane ,a_Ye= self.calc_Psid_dPsid_ddPsid_metric(aS_agent_states, \
-                oS_obst_states, self.a_last_deltaf, a_Yd, a_dYd, a_ddYd, a_dddYd)
-        a_Psi_metric = aS_agent_states[:, 4] * jnp.pi/180 # metric
-        a_dPsi_metric = a_gamma_metric = aS_agent_states[:, 5] * jnp.pi/180 # metric
-        a_e1 = a_Psi_metric - a_Psid_metric
-        a_e2 = a_dPsi_metric - a_dPsid_metric
-        a_z1_unclip = a_e1 / self.Delta1
-        a_z1_p_unclip = nthroot(a_z1_unclip**self.p_num, self.p_den)
-        a_z2_unclip = a_e2 / self.Delta2
-        eps = 1e-3
-        a_z1_p = jnp.clip(a_z1_p_unclip, -1+eps, 1-eps)
-        a_z2 = jnp.clip(a_z2_unclip, -1+eps, 1-eps)
-
-        a_s = jnp.log((1+a_z2)/(1-a_z2)) + jnp.log((1+a_z1_p)/(1-a_z1_p))
-
-        a_vx_metric = aS_agent_states[:, 2] / 3.6 # metric
-        a_beta_metric, _, _ = self.calc_beta_dbeta_ddbeta_metric(aS_agent_states, self.a_last_deltaf)  # metric
-        a_f = -self.Lf * self.Cf * (a_beta_metric + a_gamma_metric * self.Lf / a_vx_metric) / self.Iz \
-              -self.Lr * self.Cr * (-a_beta_metric + a_gamma_metric * self.Lr / a_vx_metric) / self.Iz
-        a_b = self.Lf * self.Cf / self.Iz
-
-        eps_e1 = jnp.where(a_e1>=0, 1e-8, -1e-8)
-        omegat = self.calc_omegat()
-        a_Gamma1 = 2 / (self.Delta2 * (1 - a_z2**2))
-        a_Gamma2 = 2 * (a_f + omegat - a_ddPsid_metric) / (self.Delta2 * (1 - a_z2**2)) \
-            +2 * self.p_num/self.p_den * a_z1_p * a_e2 / ((1 - a_z1_p**2) * (a_e1 + eps_e1))
-
-        a_deltaf_metric = (-self.k3 * jnp.abs(a_s)**self.alpha * jnp.sign(a_s) - self.k4 * a_s - a_Gamma2) / (a_Gamma1 * a_b * 30) # rad
-        a_deltaf_clip = self.clip_deltaf(a_deltaf_metric * 180/jnp.pi) # deg
-        self.a_last_deltaf = a_deltaf_clip
-        a_deltaf_normalize = self.nomalize_deltaf(a_deltaf_clip)
-
-        return a_deltaf_normalize, a_Psid_metric*180/jnp.pi, ao_BD,BD_lane
-
-    @ft.partial(jax.jit, static_argnums=(0,))
     def wrap_pi(self, ang):
         return (ang + jnp.pi) % (2*jnp.pi) - jnp.pi
 
     @ft.partial(jax.jit, static_argnums=(0,))
-    def calc_deltaf(self, graph: GraphsTuple, a4_dsYddt: jnp.ndarray)-> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray,jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray,jnp.ndarray, jnp.ndarray]:
+    def calc_deltaf(self, graph: GraphsTuple, a4_dsYddt: jnp.ndarray)-> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray,jnp.ndarray, jnp.ndarray , jnp.ndarray, jnp.ndarray,jnp.ndarray, jnp.ndarray , jnp.ndarray]:
         aS_agent_states = graph.type_states(MVE.AGENT, n_type=self.num_agents)
         oS_obst_states  = graph.type_states(MVE.OBST,  n_type=self.num_obsts)
+        T_goal_states  = graph.type_states(MVE.GOAL,  n_type=self.num_agents)
 
         a_Yd, a_dYd, a_ddYd, a_dddYd = a4_dsYddt[:,0], a4_dsYddt[:,1], a4_dsYddt[:,2], a4_dsYddt[:,3]
 
         # 外环：仍然用你现在的方式算期望航向角（以及调试输出）
-        a_Psid_metric, a_dPsid_metric, a_ddPsid_metric, ao_BD, BD_lane ,a_Ye= \
+        a_Psid_metric, ao_BD, BD_lane ,a_Ye= \
             self.calc_Psid_dPsid_ddPsid_metric(aS_agent_states, oS_obst_states,
                                                self.a_last_deltaf, a_Yd, a_dYd, a_ddYd, a_dddYd)
 
@@ -457,10 +431,10 @@ class UFTSTCController:
         i = self.ki * self.int_epsi
 
         # D：推荐用角速度误差，而不是差分（更稳）
-        # e_dpsi = dPsi_d - dPsi
-        e_dpsi = a_dPsid_metric - a_dPsi_metric
-        d = self.kd * e_dpsi
-
+        #e_dpsi = dPsi_d - dPsi
+        #e_dpsi = a_dPsid_metric - a_dPsi_metric
+        #d = self.kd * e_dpsi
+        d=0
         # PID 输出：这里输出的是前轮转角命令（rad）
         deltaf_cmd_rad = p + i + d
 
@@ -474,4 +448,5 @@ class UFTSTCController:
         # 归一化给环境
         deltaf_norm = self.nomalize_deltaf(deltaf_clip_deg)
 
-        return deltaf_norm, a_Psid_metric*180/jnp.pi, ao_BD, BD_lane, a_Ye ,aS_agent_states , oS_obst_states , a_Yd , deltaf_clip_deg
+        return deltaf_norm, a_Psid_metric*180/jnp.pi, ao_BD, BD_lane, a_Ye ,aS_agent_states , oS_obst_states , a_Yd , deltaf_clip_deg , T_goal_states
+

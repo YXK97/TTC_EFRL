@@ -1236,6 +1236,7 @@ class HandMadeSceneLaneChangeEdgeStaticMiddleSlowMoving(LaneChangeANDOvertakeSce
 
         # 生成初始agent
         agent_x = jnp.array([-80.])[0]
+        #agent_x = jnp.array([-40.])[0] # debug
         agent_vx = jnp.array([80])[0]
         a_agent_x = jnp.repeat(agent_x[None], self.num_agents, axis=0)  # 变道前同一x
         a_agent_y = jnp.repeat(start_y[None], self.num_agents, axis=0)
@@ -1429,11 +1430,11 @@ def gen_handmade_scene(key: PRNGKey, num_agents: int, num_ref_points: int, xrang
                                 lane_width: float, lane_centers: Array) -> Tuple[AgentState, ObstState, PathRefs, jnp.ndarray]:
     choose_key, scene_key = jr.split(key, 2)
     scene_list = [
-        # HandMadeSceneLaneChangeMiddleStaticEdgeFastMoving(scene_key, num_agents, num_ref_points, xrange, yrange, lane_width, lane_centers).make,
+        HandMadeSceneLaneChangeMiddleStaticEdgeFastMoving(scene_key, num_agents, num_ref_points, xrange, yrange, lane_width, lane_centers).make,
         # HandMadeSceneLaneChangeMiddleStaticEdgeSlowMoving(scene_key, num_agents, num_ref_points, xrange, yrange, lane_width, lane_centers).make,
         # HandMadeSceneLaneChangeEdgeStaticMiddleFastMoving(scene_key, num_agents, num_ref_points, xrange, yrange, lane_width, lane_centers).make,
         # HandMadeSceneLaneChangeEdgeStaticMiddleSlowMoving(scene_key, num_agents, num_ref_points, xrange, yrange, lane_width, lane_centers).make,
-        HandMadeSceneOvertakeEdgeStaticMiddleFastMoving(scene_key, num_agents, num_ref_points, xrange, yrange, lane_width, lane_centers).make,
+        # HandMadeSceneOvertakeEdgeStaticMiddleFastMoving(scene_key, num_agents, num_ref_points, xrange, yrange, lane_width, lane_centers).make,
         # HandMadeSceneOvertakeEdgeStaticMiddleSlowMoving(scene_key, num_agents, num_ref_points, xrange, yrange, lane_width, lane_centers).make,
     ]
     choose_id = jr.choice(choose_key, len(scene_list))

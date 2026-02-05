@@ -7,8 +7,13 @@ import ipdb
 import numpy as np
 import yaml
 
+
+from UFTSTC.cvs_utils import dump_rollout_record_to_csv6
+
+
 from UFTSTC.longitudinal_controller import PIDController
-from UFTSTC.latral_controller import UFTSTCController
+#from UFTSTC.latral_controller import UFTSTCController
+from UFTSTC.latral_controller_pid import UFTSTCController_pid
 from utils import parse_uftstc_controller_args, parse_pid_controller_args, eval_rollout_uftstc
 from defmarl.utils.utils import parse_jax_array
 
@@ -53,7 +58,8 @@ def test(args):
     )
 
     args_lateral_controller = parse_uftstc_controller_args(args, env)
-    lateral_controller = UFTSTCController(**args_lateral_controller)
+    # lateral_controller = UFTSTCController(**args_lateral_controller)
+    lateral_controller_pid = UFTSTCController_pid(**args_lateral_controller)
     args_longitudinal_controller = parse_pid_controller_args(args, env)
     longitudinal_controller = PIDController(**args_longitudinal_controller)
 
@@ -63,7 +69,7 @@ def test(args):
 
     rollout_fn = ft.partial(eval_rollout_uftstc,
                             env,
-                            lateral_controller,
+                            lateral_controller_pid,
                             longitudinal_controller)
     rollout_fn = jax_jit_np(rollout_fn)
     is_unsafe_fn = jax_jit_np(jax_vmap(env.unsafe_mask))
@@ -74,12 +80,20 @@ def test(args):
     is_unsafes = []
     rates = []
     rollouts = []
+    records = []
 
     for i_epi in range(args.epi):
         key_x0, _ = jr.split(test_keys[i_epi], 2)
 
-        rollout: Rollout = rollout_fn(key_x0)
+        rollout, record = rollout_fn(key_x0)
         is_unsafes.append(is_unsafe_fn(rollout.graph))
+
+        dump_rollout_record_to_csv6(
+            rollout, record,
+            prefix=f"epi{i_epi:02d}",
+            scene_tag=None ,
+            uftstc_root="/mnt/data/zhangqi/TTC_EFRL/UFTSTC"# 不写就是自动 s1,s2...
+        )
 
         epi_reward = rollout.rewards.sum()
         epi_cost = rollout.costs.max()
@@ -88,6 +102,7 @@ def test(args):
         costs.append(epi_cost)
         costs_real.append(epi_cost_real)
         rollouts.append(rollout)
+        records.append(record)
 
         safe_rate = 1 - is_unsafes[-1].max(axis=0).mean()
         print(f"epi: {i_epi}, reward: {epi_reward:.3f}, cost: {epi_cost:.3f}, cost_real: {epi_cost_real:.3f}, "
@@ -119,14 +134,14 @@ def test(args):
 
     videos_dir = pathlib.Path(path) / "videos"
     videos_dir.mkdir(exist_ok=True, parents=True)
-    for ii, (rollout, Ta_is_unsafe) in enumerate(zip(rollouts, is_unsafes)):
+    for ii, (rollout, record, Ta_is_unsafe) in enumerate(zip(rollouts, records, is_unsafes)):
         safe_rate = rates[ii] * 100
         video_name = f"n{args.num_agents}_epi{ii:02}_reward{rewards[ii]:.3f}_cost{costs[ii]:.3f}_sr{safe_rate:.0f}"
         viz_opts = {}
         video_path = videos_dir / f"{stamp_str}_{video_name}.mp4"
         env.render_video(rollout, video_path, Ta_is_unsafe, viz_opts, dpi=args.dpi)
-        env.plot_agent_speed_from_rollout(rollout)
-        env.plot_agent_speed_from_rollout(rollout,use_body_frame=True)
+        env.plot_agent_speed_from_rollout(rollout, record)
+        env.plot_agent_speed_from_rollout(rollout, record, use_body_frame=True)
 
 
 def main():
@@ -137,15 +152,15 @@ def main():
 
     # optional arguments
     # UFTSTC参数
-    parser.add_argument("--Af", type=float, default=18)
-    parser.add_argument("--r", type=float, default=3.9)
-    parser.add_argument("--mu", type=float, default=12.59)
-    parser.add_argument("--c", type=float, default=1.52)
-    parser.add_argument("--k1", type=float, default=0.5218)#k1 k2避障 k3 k4 跟踪
-    parser.add_argument("--k2", type=float, default=0.849)
-    parser.add_argument("--k3", type=float, default=0.31)
-    parser.add_argument("--k4", type=float, default=0.921)
-    parser.add_argument("--v", type=float, default=0.2)
+    parser.add_argument("--Af", type=float, default=15)
+    parser.add_argument("--r", type=float, default=15)
+    parser.add_argument("--mu", type=float, default=25)
+    parser.add_argument("--c", type=float, default=1.5)
+    parser.add_argument("--k1", type=float, default=0.8)#k1 k2避障 k3 k4 跟踪
+    parser.add_argument("--k2", type=float, default=0.6)
+    parser.add_argument("--k3", type=float, default=1.6)
+    parser.add_argument("--k4", type=float, default=10)
+    parser.add_argument("--v", type=float, default=0.6)
     parser.add_argument("--Delta1", type=float, default=3)
     parser.add_argument("--Delta2", type=float, default=50)
     parser.add_argument("--p-num", type=int, default=3)
@@ -153,10 +168,16 @@ def main():
     parser.add_argument("--alpha", type=float, default=7/9)
     # PID参数
     parser.add_argument("--kp", type=float, default=2)
-    parser.add_argument("--ki", type=float, default=0.1)
+    parser.add_argument("--ki", type=float, default=0.3)
     parser.add_argument("--kd", type=float, default=0)
     parser.add_argument("--max-integral", type=float, default=50.)
     parser.add_argument("--min-integral", type=float, default=-50.)
+    # delat_PID参数
+    parser.add_argument("--kp_d", type=float, default=1.5)
+    parser.add_argument("--ki_d", type=float, default=0.5)
+    parser.add_argument("--kd_d", type=float, default=0.1)
+    parser.add_argument("--max-integral_d", type=float, default=50.)
+    parser.add_argument("--min-integral_d", type=float, default=-50.)
     # 其他参数
     parser.add_argument("--epi", type=int, default=5)
     parser.add_argument("--no-video", action="store_true", default=False)
@@ -174,6 +195,19 @@ def main():
     parser.add_argument("--area-size", type=parse_jax_array, default=None,
                         help='输入jax数组，一维用逗号分隔（如10,20），二维用分号+逗号（如10,20;30,40）')
     parser.add_argument("--visible-devices", type=str, default=None)
+
+    # New parameters for lane boundaries
+    # ===== 道路边界（lane barrier）参数 =====
+    parser.add_argument("--y_min", type=float, default=-10, help="左车道边界 y")
+    parser.add_argument("--y_max", type=float, default=10, help="右车道边界 y")
+
+    parser.add_argument("--Af_lane", type=float, default=18, help="道路边界势场幅值")
+    parser.add_argument("--r_lane", type=float, default=7, help="道路边界强惩罚距离 r")
+    parser.add_argument("--mu_lane", type=float, default=9, help="道路边界开始生效距离 mu")
+    parser.add_argument("--c_lane", type=float, default=1.5, help="道路边界势场形状参数 c")
+
+    parser.add_argument("--leak_near_lane", type=float, default=0.001, help="靠近边界积分泄露")
+    parser.add_argument("--leak_far_lane", type=float, default=0.01, help="远离边界积分泄露")
 
     args = parser.parse_args()
     test(args)

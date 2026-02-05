@@ -1,3 +1,5 @@
+import jax.numpy as jnp
+
 from typing import NamedTuple, Optional
 
 from ..utils.typing import Array
@@ -34,3 +36,16 @@ class Rollout(NamedTuple):
     @property
     def n_data(self) -> int:
         return self.length * self.time_horizon
+
+class Record(NamedTuple):
+    ax: jnp.ndarray
+    deltaf: jnp.ndarray
+    Psid: jnp.ndarray
+    ao_BD: jnp.ndarray
+    BD_lane:jnp.ndarray
+    a_Ye:jnp.ndarray
+    aS_agent_states :jnp.ndarray
+    oS_obst_states :jnp.ndarray
+    a_Yd:jnp.ndarray
+    action_sum :jnp.ndarray
+    T_goal_states:jnp.ndarray
