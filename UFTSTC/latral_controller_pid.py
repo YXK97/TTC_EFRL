@@ -359,7 +359,7 @@ class UFTSTCController_pid:
 
         # a_Psid_metric = self.k1*jnp.exp(-self.v*a_BD_sum)*a_Ye/a_vx - self.k2*a_BD_sum*a_sgn_Ye/((a_BD_int_sum+1)*a_vx) \
         #               +a_dYd/a_vx*0.6 - a_beta*0.1
-        a_Psid_metric = self.k1*jnp.exp(-self.v*a_BD_sum)*a_Ye/a_vx - self.k2*BD_weighted_sum/((a_BD_int_sum+1)*a_vx) \
+        a_Psid_metric = self.k1*jnp.exp(-self.v*a_BD_sum)*a_Ye/a_vx* - self.k2*BD_weighted_sum/((a_BD_int_sum+1)*a_vx) \
                        *0 +a_dYd/a_vx*0.999 - a_beta*0
         a_Psid_metric=jnp.clip(a_Psid_metric,-jnp.pi/2, jnp.pi/2)
         self.cur_step += 1
