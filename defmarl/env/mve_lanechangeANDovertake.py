@@ -48,7 +48,7 @@ class MVELaneChangeAndOverTake(MVE):
         # 速度约束通过车身坐标系对纵向速度约束来进行
         "default_state_range": jnp.array([-100., 100., -4.5, 4.5, -INF, INF, -INF, INF, -180., 180., -INF, INF,
         -INF, INF, -INF, INF]), # 默认范围，用于指示正常工作的状态范围
-        "rollout_state_range": jnp.array([-120., 220., -10., 10., -INF, INF, -INF, INF, -180., 180., -INF, INF,
+        "rollout_state_range": jnp.array([-120., 520., -10., 10., -INF, INF, -INF, INF, -180., 180., -INF, INF,
         -INF, INF, -INF, INF]), # rollout过程中的限制，强制约束
         "rollout_state_b_range": jnp.array([-INF, INF, -INF, INF, 30., 100., -INF, INF, -INF, INF, -INF, INF,
         -INF, INF, -INF, INF]), # rollout过程中在车身坐标系下状态约束，主要对纵向速度有约束，动力学模型不允许倒车
@@ -59,7 +59,7 @@ class MVELaneChangeAndOverTake(MVE):
 
         "lane_width": 3, # 车道宽度，m
         "v_bias": 5, # 可允许的速度偏移量
-        "alpha_thresh": 1.3, # alpha大于thresh时才判定为安全，用于避障时让agent离obst不要那么近
+        "alpha_thresh": 1.4, # alpha大于thresh时才判定为安全，用于避障时让agent离obst不要那么近
     }
     PARAMS.update({
         "ego_radius": jnp.linalg.norm(PARAMS["ego_bb_size"]/2), # m
@@ -74,7 +74,7 @@ class MVELaneChangeAndOverTake(MVE):
     def __init__(self,
                  num_agents: int,
                  area_size: Optional[float] = None,
-                 max_step: int = 256,
+                 max_step: int = 384,
                  max_travel: Optional[float] = None,
                  dt: float = 0.05,
                  reward_min: float = -17.,
@@ -121,7 +121,7 @@ class MVELaneChangeAndOverTake(MVE):
 
     @property
     def num_goals(self) -> int:
-        return 3200 # 每个agent参考轨迹点的数量
+        return 4800 # 每个agent参考轨迹点的数量
 
     @override
     def reset(self, key: Array) -> Tuple[GraphsTuple, jnp.ndarray]:
@@ -130,7 +130,7 @@ class MVELaneChangeAndOverTake(MVE):
         xrange = self.params["default_state_range"][:2]
         yrange = self.params["default_state_range"][2:4]
         lanewidth = self.params["lane_width"]
-        agents, obsts, all_goals, all_dsYddts = gen_handmade_scene_randomly(key, self.num_agents, self.num_goals, xrange,
+        agents, obsts, all_goals, all_dsYddts = gen_scene_randomly(key, self.num_agents, self.num_goals, xrange,
                                                                    yrange, lanewidth, c_ycs)
         self.all_goals = all_goals
         self.all_dsYddts = all_dsYddts
@@ -325,24 +325,18 @@ class MVELaneChangeAndOverTake(MVE):
         a22_Q_agent = jax.vmap(calc_2d_rot_matrix, in_axes=(0))(a_agent_theta_deg)
 
         # 自车坐标系下的横纵向速度计算
-        a2_goal_v_b_kmph = jnp.einsum('aij, ai -> aj', a22_Q_goal, a2_goal_v_kmph)
-        a2_agent_v_b_kmph = jnp.einsum('aij, ai -> aj', a22_Q_agent, a2_agent_v_kmph)
+        a_goal_v_b_x_kmph = jnp.einsum('aij, ai -> aj', a22_Q_goal, a2_goal_v_kmph)[:, 0]
+        a_agent_v_b_x_kmph = jnp.einsum('aij, ai -> aj', a22_Q_agent, a2_agent_v_kmph)[:, 0]
 
-        reward = jnp.zeros(()).astype(jnp.float32)
-        # 循迹奖励： 位置+角度
-        # 位置奖励，和目标点的欧氏距离
-        a_dist = jnp.linalg.norm(a2_goal_pos_m - a2_agent_pos_m, axis=1)
-        reward -= a_dist.mean() * 0.01
+        # 待比较的state
+        a4_goals = jnp.concatenate([a2_goal_pos_m, a_goal_v_b_x_kmph[:, None], a_agent_theta_deg[:, None]], axis=1)
+        a4_agents = jnp.concatenate([a2_agent_pos_m, a_agent_v_b_x_kmph[:, None], a_agent_theta_deg[:, None]], axis=1)
+        a4_e = a4_agents - a4_goals
 
-        # 角度奖励
-        a_costheta_dist = jnp.cos((a_goal_theta_deg - a_agent_theta_deg) * jnp.pi/180)
-        reward += (a_costheta_dist.mean() - 1) * 0.001
+        # 权重矩阵
+        W = jnp.diag(jnp.array([1e-4, 1e-4, 2.5e-7, 1e-8]))
 
-        # 速度跟踪惩罚
-        a_delta_v = a2_goal_v_b_kmph[:, 0] - a2_agent_v_b_kmph[:, 0]
-        # reward -= (a_delta_v**2).mean() * 0.00005 # 只比较x方向（纵向）速度
-        reward -= jnp.abs(a_delta_v).mean() * 0.0005
-        reward -= jnp.where(jnp.abs(a_delta_v) > self.params["v_bias"], 1., 0.).mean() * 0.005
+        reward = -jnp.sqrt(jnp.einsum('ai, ij, ja -> a', a4_e, W, a4_e.transpose())).mean()
 
         # 动作惩罚
         reward -= (ad_action[:, 0]**2).mean() * 0.00005
@@ -793,8 +787,8 @@ class MVELaneChangeAndOverTake(MVE):
 
     @override
     def action_lim(self) -> Tuple[Action, Action]:
-        lower_lim = jnp.array([-1., -7.])[None, :].repeat(self.num_agents, axis=0) # ax: m/s^2, δ: °
-        upper_lim = jnp.array([2., 7.])[None, :].repeat(self.num_agents, axis=0)
+        lower_lim = jnp.array([-1., -3.])[None, :].repeat(self.num_agents, axis=0) # ax: m/s^2, δ: °
+        upper_lim = jnp.array([2., 3.])[None, :].repeat(self.num_agents, axis=0)
         return lower_lim, upper_lim
 
     @override
