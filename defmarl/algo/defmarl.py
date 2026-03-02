@@ -185,18 +185,11 @@ class DefMARL(Algorithm):
         policy_params = self.policy.dist.init(
             policy_key, nominal_graph, self.init_rnn_state, self.n_agents, self.nominal_z
         )
-        #policy_optim = optax.adam(learning_rate=lr_actor)
-        #self.policy_optim = optax.apply_if_finite(policy_optim, 1_000_000)
         self.policy_train_state = TrainState.create(
             apply_fn=self.policy.sample_action,
             params=policy_params,
             tx=self.policy_tx
         )
-        #self.policy_train_state = policy_train_state.replace(
-            #opt_state=InjectStatefulHyperparamsState(
-                #inner_state=policy_train_state.opt_state.inner_state,
-                #hyperparams=policy_train_state.opt_state.hyperparams.replace(
-                    #step=jnp.array(self.start_iter_index, dtype=jnp.int32))))
 
         # set up PPO critic
         self.critic = ValueNet(
@@ -227,17 +220,11 @@ class DefMARL(Algorithm):
         critic_key, key = jr.split(key)
         critic_params = self.critic.net.init(
             critic_key, nominal_graph, self.init_Vl_rnn_state, self.n_agents, self.nominal_z[0][None, :])
-        # critic_optim = optax.adam(learning_rate=lr_critic)
-        # self.critic_optim = optax.apply_if_finite(critic_optim, 1_000_000)
         self.critic_train_state = TrainState.create(
             apply_fn=self.critic.get_value,
             params=critic_params,
             tx=self.critic_tx
         )
-        #self.critic_train_state = critic_train_state.replace(
-            #opt_state=critic_train_state.opt_state.replace(
-                #hyperparams=critic_train_state.opt_state.hyperparams.replace(
-                    #step=jnp.array(self.start_iter_index, dtype=jnp.int32))))
 
         # set up constraint value net
         self.Vh = ValueNet(
@@ -267,17 +254,11 @@ class DefMARL(Algorithm):
 
         Vh_key, key = jr.split(key)
         Vh_params = self.Vh.net.init(Vh_key, nominal_graph, self.init_Vh_rnn_state, self.n_agents, self.nominal_z)
-        # Vh_optim = optax.adam(learning_rate=lr_critic)
-        # self.Vh_optim = optax.apply_if_finite(Vh_optim, 1_000_000)
         self.Vh_train_state = TrainState.create(
             apply_fn=self.Vh.get_value,
             params=Vh_params,
             tx=self.Vh_tx
         )
-        #self.Vh_train_state = Vh_train_state.replace(
-            #opt_state=Vh_train_state.opt_state.replace(
-                #hyperparams=Vh_train_state.opt_state.hyperparams.replace(
-                    #step=jnp.array(self.start_iter_index, dtype=jnp.int32))))
 
         # set up the root finder
         self.root_finder = RootFinder(

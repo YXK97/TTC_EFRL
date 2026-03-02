@@ -110,6 +110,44 @@ class GraphTransformer(nn.Module):
         return update_fn(graph)
 
 
+class RelativeGraphTransformer(nn.Module):
+    """这个graph transformer只使用receiver和edge的信息，不使用sender的信息"""
+    n_heads: int
+    out_dim: int
+    act: ActFn = nn.relu
+
+    @nn.compact
+    def __call__(self, graph: GraphsTuple) -> GraphsTuple:
+        def message(edge_feats: EdgeAttr,  sender_feats: Node, receiver_feats: Node) -> Array:
+            del sender_feats
+            query = nn.Dense(self.out_dim * self.n_heads, kernel_init=default_nn_init())(
+                receiver_feats
+            ).reshape((-1, self.n_heads, self.out_dim))
+            key = nn.Dense(self.out_dim * self.n_heads, kernel_init=default_nn_init())(
+                edge_feats
+            ).reshape((-1, self.n_heads, self.out_dim))
+            value = nn.Dense(self.out_dim * self.n_heads, kernel_init=default_nn_init())(
+                edge_feats
+            ).reshape((-1, self.n_heads, self.out_dim))
+
+            attn = (query * key).sum(-1) / jnp.sqrt(self.out_dim)
+            attn = jraph.segment_softmax(attn, segment_ids=graph.receivers, num_segments=graph.nodes.shape[0])
+            attn = attn.reshape((-1, self.n_heads, 1))  # (n_edges, n_heads, 1)
+            msgs = attn * value
+
+            return msgs.mean(axis=1)  # mean over heads
+
+        def update(node_feats: Node, msgs: Array) -> Array:
+            feats = nn.Dense(self.out_dim, kernel_init=default_nn_init())(node_feats)
+            return self.act(feats + msgs)
+
+        def aggregate(msgs: Array, recv_idx: Array, num_segments: int) -> Array:
+            return jraph.segment_sum(msgs, segment_ids=recv_idx, num_segments=num_segments)
+
+        update_fn = GNNUpdate(message, aggregate, update)
+        return update_fn(graph)
+
+
 class GNN(Protocol):
 
     @nn.compact

@@ -74,7 +74,7 @@ class MVELaneChangeAndOverTake(MVE):
     def __init__(self,
                  num_agents: int,
                  area_size: Optional[float] = None,
-                 max_step: int = 384,
+                 max_step: int = 256,
                  max_travel: Optional[float] = None,
                  dt: float = 0.05,
                  reward_min: float = -17.,
@@ -130,8 +130,8 @@ class MVELaneChangeAndOverTake(MVE):
         xrange = self.params["default_state_range"][:2]
         yrange = self.params["default_state_range"][2:4]
         lanewidth = self.params["lane_width"]
-        # agents, obsts, all_goals, all_dsYddts = gen_scene_randomly(key, self.num_agents, self.num_goals, xrange, yrange, lanewidth, c_ycs)
-        agents, obsts, all_goals, all_dsYddts = gen_handmade_scene(key, self.num_agents, self.num_goals, xrange, yrange, lanewidth, c_ycs)
+        agents, obsts, all_goals, all_dsYddts = gen_scene_randomly(key, self.num_agents, self.num_goals, xrange, yrange, lanewidth, c_ycs)
+        # agents, obsts, all_goals, all_dsYddts = gen_handmade_scene(key, self.num_agents, self.num_goals, xrange, yrange, lanewidth, c_ycs)
         self.all_goals = all_goals
         self.all_dsYddts = all_dsYddts
         goals_init_indices = find_closest_goal_indices(agents, all_goals)
@@ -715,7 +715,7 @@ class MVELaneChangeAndOverTake(MVE):
     def get_graph(self, env_state: MVEEnvState, obst_as_agent:bool = False) -> MVEEnvGraphsTuple:
         num_agents = env_state.agent.shape[0]
         num_goals = env_state.goal.shape[0]
-        num_obsts = env_state.obstacle.shape[0] # TODO: 为0时报错，但理论上可以为0
+        num_obsts = env_state.obstacle.shape[0]
         assert num_agents > 0 and num_goals > 0, "至少需要设定agent和goal!"
         assert num_agents == num_goals, "每一个agent对应一个goal"
         # node features
