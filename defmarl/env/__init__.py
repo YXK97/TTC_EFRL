@@ -2,9 +2,11 @@ from typing import Optional
 
 from defmarl.env.base import MultiAgentEnv
 from defmarl.env.mve_lanechangeANDovertake import MVELaneChangeAndOverTake
+from defmarl.env.mve_normedGraph import MVENormedGraph
 
 ENV = {
     'MVELaneChange': MVELaneChangeAndOverTake,
+    'MVENormedGraph': MVENormedGraph,
 }
 
 

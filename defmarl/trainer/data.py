@@ -1,6 +1,5 @@
 from typing import NamedTuple, Optional
 
-from ..env.mve import MVEEnvState
 from ..utils.typing import Array
 from ..utils.typing import Action, Reward, Cost, Done
 from ..utils.graph import GraphsTuple
@@ -37,7 +36,7 @@ class Rollout(NamedTuple):
         return self.length * self.time_horizon
 
 
-class Rollout_RelativeGraph(NamedTuple):
+class Rollout_NormedGraph(NamedTuple):
     graph: GraphsTuple # 绝对位姿的图
     normed_graph: GraphsTuple # 经过归一化后的图
     actions: Action

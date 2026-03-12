@@ -110,7 +110,7 @@ class GraphTransformer(nn.Module):
         return update_fn(graph)
 
 
-class RelativeGraphTransformer(nn.Module):
+class EdgeGraphTransformer(nn.Module):
     """这个graph transformer只使用receiver和edge的信息，不使用sender的信息"""
     n_heads: int
     out_dim: int
@@ -166,6 +166,24 @@ class GraphTransformerGNN(nn.Module):
         for i in range(self.n_layers):
             out_dim = self.out_dim if i == self.n_layers - 1 else self.msg_dim
             gnn_layer = GraphTransformer(self.n_heads, out_dim, act=nn.relu)
+            graph = gnn_layer(graph)
+        if node_type is None:
+            return graph.nodes
+        else:
+            return graph.type_nodes(node_type, n_type)
+
+
+class EdgeGraphTransformerGNN(nn.Module):
+    msg_dim: int
+    out_dim: int
+    n_heads: int
+    n_layers: int
+
+    @nn.compact
+    def __call__(self, graph: GraphsTuple, node_type: int = None, n_type: int = None) -> Array:
+        for i in range(self.n_layers):
+            out_dim = self.out_dim if i == self.n_layers - 1 else self.msg_dim
+            gnn_layer = EdgeGraphTransformer(self.n_heads, out_dim, act=nn.relu)
             graph = gnn_layer(graph)
         if node_type is None:
             return graph.nodes

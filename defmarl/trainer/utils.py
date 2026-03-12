@@ -8,7 +8,7 @@ from typing import Callable, TYPE_CHECKING, Optional
 
 from ..utils.typing import PRNGKey, Array
 from ..utils.graph import GraphsTuple
-from .data import Rollout
+from .data import Rollout, Rollout_NormedGraph
 
 
 if TYPE_CHECKING:
@@ -68,6 +68,50 @@ def rollout(
     _, (graphs, actions, rnn_states, rewards, costs, costs_real, dones, log_pis, next_graphs, dsYddts, zs) = (
         jax.lax.scan(body, (init_graph, init_rnn_state, z0), keys, length=env.max_episode_steps))
     rollout_data = Rollout(graphs, actions, rnn_states, rewards, costs, costs_real, dones, log_pis, next_graphs, dsYddts, zs)
+    return rollout_data
+
+
+def rollout_normed(
+        env: MultiAgentEnv,
+        actor: Callable,
+        init_rnn_state: Array,
+        key: PRNGKey,
+        gamma: float,
+        init_graph: Optional[GraphsTuple] = None,
+        init_normed_graph: Optional[GraphsTuple] = None
+) -> Rollout_NormedGraph:
+    """
+    与rollout基本一致，区别在于使用原始图进行环境step，使用归一化图作为网络输入
+    """
+    key_x0, key_z0, key = jax.random.split(key, 3)
+    if (init_graph is None) or (init_normed_graph is None) :
+        init_graph, init_normed_graph = env.reset(key_x0)
+    z0 = jax.random.uniform(key_z0, (1, 1), minval=-env.reward_max, maxval=-env.reward_min)
+
+    z_key, key = jax.random.split(key, 2)
+    rng = jax.random.uniform(z_key, (1, 1))
+    # z0 = jnp.where(rng > 0.7, -env.reward_max, z0)  # use z min
+    z0 = jnp.where(rng < 0.2, -env.reward_min, z0)  # use z max
+
+    z0 = jnp.repeat(z0, env.num_agents, axis=0)
+
+    def body(data, key_):
+        graph, normed_graph, rnn_state, z = data
+        action, log_pi, new_rnn_state = actor(normed_graph, z, rnn_state, key_)
+        next_graph, next_normed_graph, reward, cost, cost_real, done, info = env.step(graph, action)
+
+        # z dynamics
+        z_next = (z + reward) / gamma
+        z_next = jnp.clip(z_next, -env.reward_max, -env.reward_min)
+
+        return ((next_graph, next_normed_graph, new_rnn_state, z_next),
+                (graph, normed_graph, action, rnn_state, reward, cost, cost_real, done, log_pi, next_graph, next_normed_graph, z))
+
+    keys = jax.random.split(key, env.max_episode_steps)
+    _, (graphs, normed_graphs, actions, rnn_states, rewards, costs, costs_real, dones, log_pis, next_graphs, next_normed_graphs, zs) = (
+        jax.lax.scan(body, (init_graph, init_normed_graph, init_rnn_state, z0), keys, length=env.max_episode_steps))
+    rollout_data = Rollout_NormedGraph(
+        graphs, normed_graphs, actions, rnn_states, rewards, costs, costs_real, dones, log_pis, next_graphs, next_normed_graphs, zs)
     return rollout_data
 
 
@@ -153,6 +197,53 @@ def eval_rollout(
                      keys,
                      length=env.max_episode_steps))
     rollout_data = Rollout(graphs, actions, actor_rnn_states, rewards, costs, costs_real, dones, log_pis, next_graphs, dsYddts, zs)
+    return rollout_data
+
+
+def eval_rollout_normed(
+        env: MultiAgentEnv,
+        actor: Callable,
+        init_actor_rnn_state: Array,
+        key: PRNGKey,
+        init_Vh_rnn_state: Optional[Array] = None,
+        z_fn: Optional[Callable] = None,
+        stochastic: bool = False
+):
+    """
+    与eval_rollout基本一致，区别在于使用原始图进行环境step，使用归一化图作为网络输入
+    """
+    key_x0, key = jax.random.split(key)
+    init_graph, init_normed_graph = env.reset(key_x0)
+    if z_fn is not None:
+        z0 = jax.random.uniform(key, (env.num_agents, 1), minval=-env.reward_max, maxval=-env.reward_min)
+    else:
+        z0 = -(env.reward_max + env.reward_min)/2 * jnp.ones((env.num_agents, 1))
+        # 对于informarl和informarl-lagr，直接在每次测试时使用固定的z即可
+
+    def body(data, key_):
+        graph, normed_graph, actor_rnn_state, Vh_rnn_state = data
+        if z_fn is not None:
+            z, Vh_rnn_state = z_fn(normed_graph, Vh_rnn_state)
+            z_max = jnp.max(z, axis=0)
+            z = jnp.repeat(z_max[None], env.num_agents, axis=0)
+        else:
+            z = z0
+        if not stochastic:
+            action, actor_rnn_state = actor(normed_graph, z, actor_rnn_state)
+        else:
+            action, actor_rnn_state = actor(normed_graph, z, actor_rnn_state, key_)
+        next_graph, next_normed_graph, reward, cost, cost_real, done, info = env.step(graph, action)
+        return ((next_graph, next_normed_graph, actor_rnn_state, Vh_rnn_state),
+                (graph, normed_graph, action, actor_rnn_state, reward, cost, cost_real, done, None, next_graph, next_normed_graph, z))
+
+    keys = jax.random.split(key, env.max_episode_steps)
+    _, (graphs, normed_graphs, actions, actor_rnn_states, rewards, costs, costs_real, dones, log_pis, next_graphs, next_normed_graphs, zs) = (
+        jax.lax.scan(body,
+                     (init_graph, init_normed_graph, init_actor_rnn_state, init_Vh_rnn_state),
+                     keys,
+                     length=env.max_episode_steps))
+    rollout_data = Rollout_NormedGraph(
+        graphs, normed_graphs, actions, actor_rnn_states, rewards, costs, costs_real, dones, log_pis, next_graphs, next_normed_graphs, zs)
     return rollout_data
 
 
