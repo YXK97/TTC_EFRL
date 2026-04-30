@@ -153,12 +153,12 @@ class MVELaneChangeAndOverTake(MVE):
 
         # 参数提取
         as_S = aS_agent_states[:, :6] # x, y, vx, vy, θ, dθ/dt
-        a_theta = as_S[:, 4]  # degree
         as_S_metric = as_S / convert_vec_s # km/h->m/s, degree->rad, degree/s->rad/s
+        a_theta_metric = as_S_metric[:, 4] # rad
         ad_action_metric = ad_action / convert_vec_a
 
         # 旋转矩阵计算与广义旋转矩阵构造
-        a22_Q = jax.vmap(calc_2d_rot_matrix, in_axes=(0,))(a_theta)
+        a22_Q = jax.vmap(calc_2d_rot_matrix, in_axes=(0,))(a_theta_metric)
         def construct_transform_matrix(a22_Q):
             """从 (a, 2, 2) 的旋转矩阵 Q 构造 (a, 6, 6) 的分块矩阵。"""
             a = a22_Q.shape[0]
@@ -211,6 +211,8 @@ class MVELaneChangeAndOverTake(MVE):
         aS_S_new = self.clip_state(aS_S_new_unclip)
 
         return aS_S_new
+
+    """
     def global_speed_trans(self,aS_agent_states):
         assert aS_agent_states.shape == (self.num_agents, self.state_dim)
         vx_w_kmh = aS_agent_states[:, 2]
@@ -219,7 +221,7 @@ class MVELaneChangeAndOverTake(MVE):
         a22_Q = jax.vmap(calc_2d_rot_matrix, in_axes=(0,))(theta_deg)
         v_w = jnp.stack([vx_w_kmh, vy_w_kmh], axis=1)  # (A,2)
         def construct_transform_matrix(a22_Q):
-                """从 (a, 2, 2) 的旋转矩阵 Q 构造 (a, 6, 6) 的分块矩阵。"""
+                # 从 (a, 2, 2) 的旋转矩阵 Q 构造 (a, 6, 6) 的分块矩阵。
                 a = a22_Q.shape[0]
                 a66_barQ = jnp.zeros((a, 6, 6))
                 a66_barQ = a66_barQ.at[:, :2, :2].set(a22_Q)
@@ -230,6 +232,7 @@ class MVELaneChangeAndOverTake(MVE):
         ass_barQ = construct_transform_matrix(a22_Q)
         v_b = jnp.einsum("aij,aj->ai", ass_barQ, v_w)  # (A,2)
         return v_b
+    """
 
     def obst_step_euler(self, o_obst_states: ObstState) -> ObstState:
         """障碍车作匀速直线运动"""
@@ -315,21 +318,21 @@ class MVELaneChangeAndOverTake(MVE):
         # 参数提取
         a2_goal_pos_m = aS_goals_states[:, :2]
         a2_goal_v_kmph = aS_goals_states[:, 2:4]
-        a_goal_theta_deg = aS_goals_states[:, 4]
+        a_goal_theta_rad = aS_goals_states[:, 4] * jnp.pi/180
         a2_agent_pos_m = aS_agents_states[:, :2]
         a2_agent_v_kmph = aS_agents_states[:, 2:4]
-        a_agent_theta_deg = aS_agents_states[:, 4]
+        a_agent_theta_rad = aS_agents_states[:, 4] * jnp.pi/180
 
         # 旋转矩阵计算
-        a22_Q_goal = jax.vmap(calc_2d_rot_matrix, in_axes=(0))(a_goal_theta_deg)
-        a22_Q_agent = jax.vmap(calc_2d_rot_matrix, in_axes=(0))(a_agent_theta_deg)
+        a22_Q_goal = jax.vmap(calc_2d_rot_matrix, in_axes=(0))(a_goal_theta_rad)
+        a22_Q_agent = jax.vmap(calc_2d_rot_matrix, in_axes=(0))(a_agent_theta_rad)
 
         # 自车坐标系下的横纵向速度计算
         a_goal_v_b_x_kmph = jnp.einsum('aij, ai -> aj', a22_Q_goal, a2_goal_v_kmph)[:, 0]
         a_agent_v_b_x_kmph = jnp.einsum('aij, ai -> aj', a22_Q_agent, a2_agent_v_kmph)[:, 0]
 
         # 待比较的state
-        a4_goals = jnp.concatenate([a2_goal_pos_m, a_goal_v_b_x_kmph[:, None], a_agent_theta_deg[:, None]], axis=1)
+        a4_goals = jnp.concatenate([a2_goal_pos_m, a_goal_v_b_x_kmph[:, None], a_goal_theta_deg[:, None]], axis=1)
         a4_agents = jnp.concatenate([a2_agent_pos_m, a_agent_v_b_x_kmph[:, None], a_agent_theta_deg[:, None]], axis=1)
         a4_e = a4_agents - a4_goals
 
@@ -372,7 +375,7 @@ class MVELaneChangeAndOverTake(MVE):
         # agent 和 obst 之间的scaling factor
         if num_obsts == 0:
             a_obst_cost = -jnp.ones((num_agents,), dtype=jnp.float32)
-            a_obst_cost_real = jnp.ones((num_agents,), dtype=jnp.float32)
+            a_obst_cost_real = -jnp.ones((num_agents,), dtype=jnp.float32)
         else:
             obstacle_states = graph.type_states(type_idx=MVE.OBST, n_type=num_obsts)
             i_pairs, j_pairs = gen_i_j_pairs(num_agents, num_obsts)

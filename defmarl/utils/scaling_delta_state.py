@@ -72,21 +72,21 @@ def filter_in_bound(k2_intersections: Array, A, b, fill: Pos2d) -> Array:
 @jax.jit
 def scaling_calc(s1: State, s2: State) -> Array:
     """计算agent和agent/obst的scaling factor"""
-    # state: x y vx vy θ dθdt bb_w bb_h
-    # 注意单位需要是 m m m/s m/s rad rad/s m m
+    # state: x y vx vy θ dθdt δ_r bb_w bb_h
+    # 注意单位需要是 m m m/s m/s rad rad/s rad m m
     O1 = s1[:2]; O2 = s2[:2]
     # 计算 host 和 agent/obst 的顶点， host/agent/obst均为矩形
     Q1 = calc_2d_rot_matrix(s1[4])
-    m_V = jnp.array([[s1[6] / 2, s1[7] / 2],
-                    [s1[6] / 2, -s1[7] / 2],
-                    [-s1[6] / 2, s1[7] / 2],
-                    [-s1[6] / 2, -s1[7] / 2]])
+    m_V = jnp.array([[s1[7] / 2, s1[8] / 2],
+                    [s1[7] / 2, -s1[8] / 2],
+                    [-s1[7] / 2, s1[8] / 2],
+                    [-s1[7] / 2, -s1[8] / 2]])
     m_V = O1 + m_V @ Q1.T
     Q2 = calc_2d_rot_matrix(s2[4])
-    n_P = jnp.array([[s2[6] / 2, s2[7] / 2],
-                    [s2[6] / 2, -s2[7] / 2],
-                    [-s2[6] / 2, s2[7] / 2],
-                    [-s2[6] / 2, -s2[7] / 2]])
+    n_P = jnp.array([[s2[7] / 2, s2[8] / 2],
+                    [s2[7] / 2, -s2[8] / 2],
+                    [-s2[7] / 2, s2[8] / 2],
+                    [-s2[7] / 2, -s2[8] / 2]])
     n_P = O2 + n_P @ Q2.T
 
     # 计算S1和S2的A1 b1 A2 b2
@@ -96,8 +96,8 @@ def scaling_calc(s1: State, s2: State) -> Array:
                     [ 0.,-1.]]) # y>=-h/2
     A1 = Ao @ Q1.T
     A2 = Ao @ Q2.T
-    b1o = jnp.array([s1[6] / 2, s1[6] / 2, s1[7] / 2, s1[7] / 2])
-    b2o = jnp.array([s2[6] / 2, s2[6] / 2, s2[7] / 2, s2[7] / 2])
+    b1o = jnp.array([s1[7] / 2, s1[7] / 2, s1[8] / 2, s1[8] / 2])
+    b2o = jnp.array([s2[7] / 2, s2[7] / 2, s2[8] / 2, s2[8] / 2])
     b1 = b1o + A1 @ O1
     b2 = b2o + A2 @ O2
 
@@ -128,10 +128,10 @@ def scaling_calc_bound(s: State, A: Array, b: Array) -> Array:
     O = s[:2]
     # 计算host的顶点，host为矩形
     Q = calc_2d_rot_matrix(s[4])
-    m_V = jnp.array([[ s[6]/2,  s[7]/2],
-                     [ s[6]/2, -s[7]/2],
-                     [-s[6]/2,  s[7]/2],
-                     [-s[6]/2, -s[7]/2]])
+    m_V = jnp.array([[ s[7]/2,  s[8]/2],
+                     [ s[7]/2, -s[8]/2],
+                     [-s[7]/2,  s[8]/2],
+                     [-s[7]/2, -s[8]/2]])
     m_V = O + m_V @ Q.T
 
     # host向自身顶点发射射线
