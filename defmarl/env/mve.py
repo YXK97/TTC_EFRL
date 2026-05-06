@@ -257,7 +257,7 @@ class MVE(MultiAgentEnv, ABC): # # Multi Vehicles Environment
         pass
 
     @abstractmethod
-    def get_cost(self, graph: MVEEnvGraphsTuple) -> Cost:
+    def get_cost(self, graph: MVEEnvGraphsTuple, action: Action) -> Cost:
         pass
 
     def render_video(

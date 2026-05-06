@@ -18,16 +18,16 @@ from .base import Algorithm
 from ..utils.typing import Action, Params, PRNGKey, Array, FloatScalar
 from ..utils.graph import GraphsTuple
 from ..utils.utils import jax_vmap, tree_index, tree_where
-from ..trainer.data import Rollout
-from ..trainer.utils import rollout as rollout_fn
+from ..trainer.data import Rollout_NormedGraph
+from ..trainer.utils import rollout_normed as rollout_fn
 from ..trainer.utils import has_any_nan_or_inf, compute_norm_and_clip
 from ..env.base import MultiAgentEnv
-from ..algo.module.value import ValueNet
-from ..algo.module.policy import PPOPolicy
+from ..algo.module.value import ValueNet_EdgeGraph
+from ..algo.module.policy import PPOPolicy_EdgeGraph
 from ..nn.utils import get_default_tx
 
 
-class DefMARL(Algorithm):
+class DefMARL_normedGraph(Algorithm):
     def __init__(
             self,
             env: MultiAgentEnv,
@@ -78,7 +78,7 @@ class DefMARL(Algorithm):
             iter_index: int = 0,
             **kwargs
     ):
-        super(DefMARL, self).__init__(
+        super(DefMARL_normedGraph, self).__init__(
             env=env,
             node_dim=node_dim,
             edge_dim=edge_dim,
@@ -156,7 +156,7 @@ class DefMARL(Algorithm):
         self.nominal_z = jnp.array([[0.5]]).repeat(self.n_agents, axis=0)  # (n_agents, 1)
 
         # set up EFPPO policy
-        self.policy = PPOPolicy(
+        self.policy = PPOPolicy_EdgeGraph(
             node_dim=self.node_dim,
             edge_dim=self.edge_dim,
             n_agents=self.n_agents,
@@ -192,7 +192,7 @@ class DefMARL(Algorithm):
         )
 
         # set up PPO critic
-        self.critic = ValueNet(
+        self.critic = ValueNet_EdgeGraph(
             node_dim=self.node_dim,
             edge_dim=self.edge_dim,
             n_agents=self.n_agents,
@@ -227,7 +227,7 @@ class DefMARL(Algorithm):
         )
 
         # set up constraint value net
-        self.Vh = ValueNet(
+        self.Vh = ValueNet_EdgeGraph(
             node_dim=self.node_dim,
             edge_dim=self.edge_dim,
             n_agents=self.n_agents,
@@ -271,32 +271,36 @@ class DefMARL(Algorithm):
         self.key = key
 
         # rollout function
-        def rollout_fn_single_(cur_params, cur_key, cur_init_graph):
+        def rollout_fn_single_(cur_params, cur_key, cur_init_graph, cur_init_normed_graph):
             return rollout_fn(self._env,
                               ft.partial(self.step, params=cur_params),
                               self.init_rnn_state,
                               cur_key,
                               self.gamma,
-                              cur_init_graph)
+                              cur_init_graph,
+                              cur_init_normed_graph)
 
-        def rollout_fn_(cur_params, cur_keys, cur_init_graphs=None):
-            return jax.vmap(ft.partial(rollout_fn_single_, cur_params))(cur_keys, cur_init_graphs)
+        def rollout_fn_(cur_params, cur_keys, cur_init_graphs=None, cur_init_normed_graph=None):
+            return jax.vmap(ft.partial(rollout_fn_single_, cur_params))(cur_keys, cur_init_graphs, cur_init_normed_graph)
 
         self.rollout_fn = jax.jit(rollout_fn_)
 
-        def get_init_graph_(init_graph_key: PRNGKey, memory: Rollout):
+        def get_init_graph_(init_graph_key: PRNGKey, memory: Rollout_NormedGraph):
             reset_key, rng_key, idx_key = jr.split(init_graph_key, 3)
             rng = jr.uniform(rng_key, ())
-            reset_graph, _ = self._env.reset(reset_key)
+            reset_graph, reset_normed_graph = self._env.reset(reset_key)
             if memory is not None:
                 idx = jr.randint(idx_key, (), 0, memory.dones.shape[0])
                 memory_graph = tree_index(memory.graph, idx)
+                memory_normed_graph = tree_index(memory.normed_graph, idx)
                 memory_graph = tree_index(memory_graph, -1)
+                memory_normed_graph = tree_index(memory_normed_graph, -1)
             else:
                 return reset_graph
             use_memory = (rng < 0.5) & (memory is not None)
             init_graph = tree_where(use_memory, memory_graph, reset_graph)
-            return init_graph
+            init_normed_graph = tree_where(use_memory, memory_normed_graph, reset_graph)
+            return init_graph, init_normed_graph
 
         self.get_init_graph = jax.jit(get_init_graph_)
         self.memory = None
@@ -368,7 +372,7 @@ class DefMARL(Algorithm):
         }
 
     def get_opt_z(
-            self, graph: GraphsTuple, Vh_rnn_state: Array, params: Optional[Params] = None
+            self, normed_graph: GraphsTuple, Vh_rnn_state: Array, params: Optional[Params] = None
     ) -> Tuple[FloatScalar, Array]:
         if params is None:
             params = self.params
@@ -377,42 +381,42 @@ class DefMARL(Algorithm):
             Vh_fn = ft.partial(self.Vh_train_state.apply_fn, Vh_params, obs, rnn_state)
             return self.root_finder.get_dec_opt_z(Vh_fn, obs)
 
-        return jax.jit(fn_)(params["Vh"], graph, Vh_rnn_state)
+        return jax.jit(fn_)(params["Vh"], normed_graph, Vh_rnn_state)
 
     def act(
             self,
-            graph: GraphsTuple,
+            normed_graph: GraphsTuple,
             z: Array,
             rnn_state: Array,
             params: Optional[Params] = None,
     ) -> [Action, Array]:
         if params is None:
             params = self.params
-        action, rnn_state = self.policy.get_action(params["policy"], graph, rnn_state, z)
+        action, rnn_state = self.policy.get_action(params["policy"], normed_graph, rnn_state, z)
         return action, rnn_state
 
     def get_value(
             self,
-            graph: GraphsTuple,
+            normed_graph: GraphsTuple,
             z: Array,
             rnn_state: Array,
             params: Optional[Params] = None
     ) -> Tuple[Array, Array]:
         if params is None:
             params = self.params
-        value, rnn_state = self.critic.get_value(params["Vl"], graph, rnn_state, z[0][None, :])
+        value, rnn_state = self.critic.get_value(params["Vl"], normed_graph, rnn_state, z[0][None, :])
         return value, rnn_state
 
     def step(
-            self, graph: GraphsTuple, z: Array, rnn_state: Array, key: PRNGKey, params: Optional[Params] = None
+            self, normed_graph: GraphsTuple, z: Array, rnn_state: Array, key: PRNGKey, params: Optional[Params] = None
     ) -> Tuple[Action, Array, Array]:
         if params is None:
             params = self.params
-        action, log_pi, rnn_state = self.policy_train_state.apply_fn(params["policy"], graph, rnn_state, key, z)
+        action, log_pi, rnn_state = self.policy_train_state.apply_fn(params["policy"], normed_graph, rnn_state, key, z)
         return action, log_pi, rnn_state
 
     @ft.partial(jax.pmap, in_axes=(None, None, 0), axis_name='n_gpu', static_broadcasted_argnums=(0,))
-    def collect(self, params: Params, b_key: PRNGKey) -> Rollout:
+    def collect(self, params: Params, b_key: PRNGKey) -> Rollout_NormedGraph:
         if not self.use_prev_init or self.memory is None:
             rollout_result = self.rollout_fn(params, b_key)
             return rollout_result
@@ -420,12 +424,12 @@ class DefMARL(Algorithm):
             init_rollout_key = jax.vmap(jr.split)(b_key)
             init_key = init_rollout_key[:, 0]
             rollout_key = init_rollout_key[:, 1]
-            init_graphs = jax.vmap(ft.partial(self.get_init_graph, memory=self.memory))(init_key)
+            init_graphs, init_normed_graphs = jax.vmap(ft.partial(self.get_init_graph, memory=self.memory))(init_key)
 
-            rollout_result = self.rollout_fn(params, rollout_key, init_graphs)
+            rollout_result = self.rollout_fn(params, rollout_key, init_graphs, init_normed_graphs)
             return rollout_result
 
-    def update(self, rollouts: Rollout, iter_index: int) -> dict:
+    def update(self, rollouts: Rollout_NormedGraph, iter_index: int) -> dict:
         _, self.key = jr.split(self.key)
         assert iter_index == self.iter_index
         critic_train_state, Vh_train_state, policy_train_state, update_info = self.pmap_update(
@@ -457,7 +461,7 @@ class DefMARL(Algorithm):
                     critic_train_state: TrainState,
                     Vh_train_state: TrainState,
                     policy_train_state: TrainState,
-                    rollout: Rollout):
+                    rollout: Rollout_NormedGraph):
         assert rollout.dones.shape[0] * rollout.dones.shape[1] >= self.batch_size
         for i_epoch in range(self.epoch_ppo):
             idx = np.arange(rollout.dones.shape[0])
@@ -477,24 +481,24 @@ class DefMARL(Algorithm):
 
     def scan_value(
             self,
-            rollout: Rollout,
+            rollout: Rollout_NormedGraph,
             init_rnn_state_Vl: Array,
             init_rnn_state_Vh: Array,
             critic_params: Params,
             Vh_params: Params
     ) -> Tuple[Tuple[Array, Array], Tuple[Array, Array], Tuple[Array, Array]]:
-        graphs = rollout.graph  # (T,)
+        normed_graphs = rollout.normed_graph  # (T,)
         zs = rollout.zs  # (T, a, 1)
 
         def body_(rnn_state, inp):
-            graph, z = inp
+            normed_graph, z = inp
             rnn_state_Vl, rnn_state_Vh = rnn_state
-            value, new_rnn_state_V = self.critic.get_value(critic_params, graph, rnn_state_Vl, z[0][None, :])
-            value_h, new_rnn_state_Vh = self.Vh.get_value(Vh_params, graph, rnn_state_Vh, z)
+            value, new_rnn_state_V = self.critic.get_value(critic_params, normed_graph, rnn_state_Vl, z[0][None, :])
+            value_h, new_rnn_state_Vh = self.Vh.get_value(Vh_params, normed_graph, rnn_state_Vh, z)
             return (new_rnn_state_V, new_rnn_state_Vh), (value, value_h, rnn_state_Vl, rnn_state_Vh)
 
         (final_rnn_state_Vl, final_rnn_state_Vh), (T_Vl, Tah_Vh, rnn_states_Vl, rnn_states_Vh) = (
-            jax.lax.scan(body_, (init_rnn_state_Vl, init_rnn_state_Vh), (graphs, zs)))
+            jax.lax.scan(body_, (init_rnn_state_Vl, init_rnn_state_Vh), (normed_graphs, zs)))
 
         T_Vl = T_Vl.squeeze()
         return (T_Vl, Tah_Vh), (rnn_states_Vl, rnn_states_Vh), (final_rnn_state_Vl, final_rnn_state_Vh)
@@ -505,7 +509,7 @@ class DefMARL(Algorithm):
             critic_train_state: TrainState,
             Vh_train_state: TrainState,
             policy_train_state: TrainState,
-            rollout: Rollout,
+            rollout: Rollout_NormedGraph,
             batch_idx: Array,
             rnn_chunk_ids: Array
     ) -> Tuple[TrainState, TrainState, TrainState, dict]:
@@ -521,13 +525,13 @@ class DefMARL(Algorithm):
         (bT_Vl, bTah_Vh), (rnn_states_Vl, rnn_states_Vh), (final_rnn_states_Vl, final_rnn_states_Vh) = (
             jax_vmap(scan_value)(rollout))
 
-        def final_value_fn(graph, zs, rnn_state_Vl, rnn_state_Vh):
-            value, _ = self.critic.get_value(critic_train_state.params, tree_index(graph, -1), rnn_state_Vl, zs[-1][0][None, :])
-            value_h, _ = self.Vh.get_value(Vh_train_state.params, tree_index(graph, -1), rnn_state_Vh, zs[-1])
+        def final_value_fn(normed_graph, zs, rnn_state_Vl, rnn_state_Vh):
+            value, _ = self.critic.get_value(critic_train_state.params, tree_index(normed_graph, -1), rnn_state_Vl, zs[-1][0][None, :])
+            value_h, _ = self.Vh.get_value(Vh_train_state.params, tree_index(normed_graph, -1), rnn_state_Vh, zs[-1])
             return value.squeeze(), value_h
 
         final_Vl, final_Vh = jax_vmap(final_value_fn)(
-            rollout.next_graph, rollout.zs, final_rnn_states_Vl, final_rnn_states_Vh)
+            rollout.next_normed_graph, rollout.zs, final_rnn_states_Vl, final_rnn_states_Vh)
         bTp1_Vl = jnp.concatenate([bT_Vl, final_Vl[:, None]], axis=1)
         assert bTp1_Vl.shape == (b, T + 1)
         bTp1ah_Vh = jnp.concatenate([bTah_Vh, final_Vh[:, None]], axis=1)
@@ -571,7 +575,7 @@ class DefMARL(Algorithm):
         return critic_train_state, Vh_train_state, policy_train_state, info
 
     def scan_eval_action(
-            self, rollout: Rollout, init_rnn_state: Array, action_keys: PRNGKey, actor_params: Params
+            self, rollout: Rollout_NormedGraph, init_rnn_state: Array, action_keys: PRNGKey, actor_params: Params
     ) -> Tuple[Array, Array, Array, Array]:
         T_graph = rollout.graph  # (T, )
         Ta_z = rollout.zs  # (T, n_agent, 1)
@@ -590,7 +594,7 @@ class DefMARL(Algorithm):
     def update_policy(
             self,
             policy_train_state: TrainState,
-            rollout: Rollout,
+            rollout: Rollout_NormedGraph,
             bTa_A: Array,
             rnn_chunk_ids: Array
     ):
@@ -638,7 +642,7 @@ class DefMARL(Algorithm):
             self,
             critic_train_state: TrainState,
             Vh_train_state: TrainState,
-            rollout: Rollout,
+            rollout: Rollout_NormedGraph,
             bT_Ql: Array,
             bTah_Qh: Array,
             rnn_states_Vl: Array,
@@ -658,8 +662,6 @@ class DefMARL(Algorithm):
             )
             loss_Vl_device = optax.l2_loss(bcT_Vl, bcT_Ql)
             loss_Vh_device = optax.l2_loss(bcTah_Vh, bcTah_Qh)
-            # loss_Vl_device = jnp.where(loss_Vl_device < 1e9, loss_Vl_device, 0)
-            # loss_Vh_device = jnp.where(loss_Vh_device < 1e9, loss_Vh_device, 0) # 降低safety计算过程中，由于各种计算方法误差导致的噪声
             loss_Vl = jax.lax.pmean(loss_Vl_device.mean(), axis_name='n_gpu')
             loss_Vh = jax.lax.pmean(loss_Vh_device.mean(), axis_name='n_gpu')
             gt_unsafe = jax.lax.pmean((bcTah_Qh > 1e-6).mean(), axis_name='n_gpu')

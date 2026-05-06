@@ -211,8 +211,7 @@ def tree_where(cond: Union[BoolScalar, bool], true_val: _PyTree, false_val: _PyT
 
 @jax.jit
 def calc_2d_rot_matrix(angle: float) -> Array:
-    "计算二维平面的旋转矩阵，angle输入为degree: xO = Q·xb，这里的x0和xb均为列向量"
-    angle = angle * jnp.pi / 180
+    "计算二维平面的旋转矩阵，angle输入为rad: xO = Q·xb，这里的x0和xb均为列向量"
     return jnp.array([[jnp.cos(angle), -jnp.sin(angle)],
                       [jnp.sin(angle), jnp.cos(angle)]]) # Q
 

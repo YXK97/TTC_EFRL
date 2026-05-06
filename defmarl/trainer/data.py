@@ -34,3 +34,35 @@ class Rollout(NamedTuple):
     @property
     def n_data(self) -> int:
         return self.length * self.time_horizon
+
+
+class Rollout_NormedGraph(NamedTuple):
+    graph: GraphsTuple # 绝对位姿的图
+    normed_graph: GraphsTuple # 经过归一化后的图
+    actions: Action
+    rnn_states: Array
+    rewards: Reward
+    costs: Cost
+    costs_real: Cost
+    dones: Done
+    log_pis: Optional[Array]
+    next_graph: GraphsTuple  # 绝对位姿的图
+    next_normed_graph: GraphsTuple # 经过归一化后的图
+    zs: Optional[Array] = None
+    z_global: Optional[Array] = None
+
+    @property
+    def length(self) -> int:
+        return self.rewards.shape[0]
+
+    @property
+    def time_horizon(self) -> int:
+        return self.rewards.shape[1]
+
+    @property
+    def num_agents(self) -> int:
+        return self.rewards.shape[2]
+
+    @property
+    def n_data(self) -> int:
+        return self.length * self.time_horizon

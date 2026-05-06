@@ -16,7 +16,7 @@ from matplotlib.patches import FancyArrow
 from .mve import MVE, MVEEnvState, MVEEnvGraphsTuple
 from .designed_scene_gen import gen_scene_randomly, gen_handmade_scene
 from .utils import process_lane_centers, process_lane_marks, relative_state
-from defmarl.trainer.data import Rollout
+from defmarl.trainer.data import Rollout_NormedGraph
 from defmarl.utils.graph import EdgeBlock, GetGraph, GraphsTuple
 from defmarl.utils.typing import Action, Reward, Cost, Array, State, AgentState, ObstState, Done, Info
 from defmarl.utils.utils import tree_index, MutablePatchCollection, save_anim, calc_2d_rot_matrix, \
@@ -25,7 +25,7 @@ from ..utils.scaling import scaling_calc, scaling_calc_bound
 
 INF = jnp.inf
 
-class MVELaneChangeAndOverTake(MVE):
+class MVENormedGraph(MVE):
     """该任务使用agent位姿和预设轨迹的偏移量、加减速度和方向盘转角的大小作为的reward的度量，
     scaling factor作为cost的度量，每个agent分配一个goal并规划出一条轨迹（五次多项式），
     环境为四车道，障碍车均沿车道作匀速直线运动"""
@@ -48,7 +48,7 @@ class MVELaneChangeAndOverTake(MVE):
         # 速度约束通过车身坐标系对纵向速度约束来进行
         "default_state_range": jnp.array([-100., 100., -4.5, 4.5, -INF, INF, -INF, INF, -180., 180., -INF, INF,
         -INF, INF, -INF, INF]), # 默认范围，用于指示正常工作的状态范围
-        "rollout_state_range": jnp.array([-120., 520., -10., 10., -INF, INF, -INF, INF, -180., 180., -INF, INF,
+        "rollout_state_range": jnp.array([-1000., 1000., -10., 10., -INF, INF, -INF, INF, -180., 180., -INF, INF,
         -INF, INF, -INF, INF]), # rollout过程中的限制，强制约束
         "rollout_state_b_range": jnp.array([-INF, INF, -INF, INF, 30., 100., -INF, INF, -INF, INF, -INF, INF,
         -INF, INF, -INF, INF]), # rollout过程中在车身坐标系下状态约束，主要对纵向速度有约束，动力学模型不允许倒车
@@ -81,10 +81,10 @@ class MVELaneChangeAndOverTake(MVE):
                  reward_max: float = 0.5,
                  params: dict = None
                  ):
-        area_size = MVELaneChangeAndOverTake.PARAMS["rollout_state_range"][:4] if area_size is None else area_size
-        params = MVELaneChangeAndOverTake.PARAMS if params is None else params
-        super(MVELaneChangeAndOverTake, self).__init__(num_agents, area_size, max_step, max_travel, dt, reward_min, reward_max, params)
-        # assert self.params["n_obsts"] == MVELaneChangeAndOverTake.PARAMS["n_obsts"], "本环境只接受2个障碍物的设置！"
+        area_size = MVENormedGraph.PARAMS["rollout_state_range"][:4] if area_size is None else area_size
+        params = MVENormedGraph.PARAMS if params is None else params
+        super(MVENormedGraph, self).__init__(num_agents, area_size, max_step, max_travel, dt, reward_min, reward_max, params)
+        # assert self.params["n_obsts"] == MVENormedGraph.PARAMS["n_obsts"], "本环境只接受2个障碍物的设置！"
         self.all_goals = jnp.zeros((num_agents, self.num_goals, self.state_dim))  # 参考点初始化
         self.all_dsYddts = jnp.zeros((num_agents, self.num_goals, 4)) # 轨迹的y方向偏移量与偏移量导数初始化
         self.num_obsts = 0 # 初始化
@@ -124,24 +124,24 @@ class MVELaneChangeAndOverTake(MVE):
         return 4800 # 每个agent参考轨迹点的数量
 
     @override
-    def reset(self, key: Array) -> Tuple[GraphsTuple, jnp.ndarray]:
+    def reset(self, key: Array) -> Tuple[GraphsTuple, GraphsTuple]:
         """使用场景类别生成函数进行agent、goal和obstacle的生成"""
         c_ycs = self.params["lane_centers"]
         xrange = self.params["default_state_range"][:2]
         yrange = self.params["default_state_range"][2:4]
         lanewidth = self.params["lane_width"]
-        agents, obsts, all_goals, all_dsYddts = gen_scene_randomly(key, self.num_agents, self.num_goals, xrange, yrange, lanewidth, c_ycs)
-        # agents, obsts, all_goals, all_dsYddts = gen_handmade_scene(key, self.num_agents, self.num_goals, xrange, yrange, lanewidth, c_ycs)
+        agents, obsts, all_goals, _ = gen_scene_randomly(key, self.num_agents, self.num_goals, xrange, yrange, lanewidth, c_ycs)
+        # agents, obsts, all_goals, _ = gen_handmade_scene(key, self.num_agents, self.num_goals, xrange, yrange, lanewidth, c_ycs)
         self.all_goals = all_goals
-        self.all_dsYddts = all_dsYddts
         goals_init_indices = find_closest_goal_indices(agents, all_goals)
         agents_indices = jnp.arange(agents.shape[0])
         goals = all_goals[agents_indices, goals_init_indices, :]
-        dsYddts = all_dsYddts[agents_indices, goals_init_indices, :]
         env_state = MVEEnvState(agents, goals, obsts)
+
         self.num_obsts = obsts.shape[0]
 
-        return self.get_graph(env_state), dsYddts
+        graph, normed_graph = self.get_graph(env_state)
+        return graph, normed_graph
 
     @override
     def agent_step_euler(self, aS_agent_states: AgentState, ad_action: Action) -> AgentState:
@@ -212,28 +212,6 @@ class MVELaneChangeAndOverTake(MVE):
 
         return aS_S_new
 
-    """
-    def global_speed_trans(self,aS_agent_states):
-        assert aS_agent_states.shape == (self.num_agents, self.state_dim)
-        vx_w_kmh = aS_agent_states[:, 2]
-        vy_w_kmh = aS_agent_states[:, 3]
-        theta_deg = aS_agent_states[:, 4]
-        a22_Q = jax.vmap(calc_2d_rot_matrix, in_axes=(0,))(theta_deg)
-        v_w = jnp.stack([vx_w_kmh, vy_w_kmh], axis=1)  # (A,2)
-        def construct_transform_matrix(a22_Q):
-                # 从 (a, 2, 2) 的旋转矩阵 Q 构造 (a, 6, 6) 的分块矩阵。
-                a = a22_Q.shape[0]
-                a66_barQ = jnp.zeros((a, 6, 6))
-                a66_barQ = a66_barQ.at[:, :2, :2].set(a22_Q)
-                a66_barQ = a66_barQ.at[:, 2:4, 2:4].set(a22_Q)
-                two2_I = jnp.eye(2)
-                a66_barQ = a66_barQ.at[:, 4:6, 4:6].set(jnp.tile(two2_I, (a, 1, 1)))
-                return a66_barQ
-        ass_barQ = construct_transform_matrix(a22_Q)
-        v_b = jnp.einsum("aij,aj->ai", ass_barQ, v_w)  # (A,2)
-        return v_b
-    """
-
     def obst_step_euler(self, o_obst_states: ObstState) -> ObstState:
         """障碍车作匀速直线运动"""
         num_obsts = o_obst_states.shape[0]
@@ -247,19 +225,18 @@ class MVELaneChangeAndOverTake(MVE):
         assert o_obst_states_new.shape == (num_obsts, self.state_dim)
         return o_obst_states_new
 
-    def goal_dsYddt_step(self, aS_agent_states_new: AgentState) -> Tuple[State, jnp.ndarray]:
+    def goal_step(self, aS_agent_states_new: AgentState) -> State:
         """根据下一步的agent位置，寻找相应的距离最近的目标点作为参考"""
         a_goals_indices = find_closest_goal_indices(aS_agent_states_new, self.all_goals)
         a_agents_indices = jnp.arange(aS_agent_states_new.shape[0])
         aS_goal_states = self.all_goals[a_agents_indices, a_goals_indices, :]
-        a4_dsYddts = self.all_dsYddts[a_agents_indices, a_goals_indices, :]
 
-        return aS_goal_states, a4_dsYddts
+        return aS_goal_states
 
     @override
     def step(
             self, graph: MVEEnvGraphsTuple, action: Action, get_eval_info: bool = False
-    ) -> Tuple[MVEEnvGraphsTuple, jnp.ndarray, Reward, Cost, Cost, Done, Info]:
+    ) -> Tuple[MVEEnvGraphsTuple, MVEEnvGraphsTuple, Reward, Cost, Cost, Done, Info]:
         # get information from graph
         agent_states = graph.type_states(type_idx=MVE.AGENT, n_type=self.num_agents)
         goal_states = graph.type_states(type_idx=MVE.GOAL, n_type=self.num_agents) # debug
@@ -269,7 +246,7 @@ class MVELaneChangeAndOverTake(MVE):
         # calculate next graph
         action = self.transform_action(action)
         next_agent_states = self.agent_step_euler(agent_states, action)
-        next_goal_states, next_dsYddts = self.goal_dsYddt_step(next_agent_states)
+        next_goal_states = self.goal_step(next_agent_states)
         next_env_state = MVEEnvState(next_agent_states, next_goal_states, next_obst_states)
         info = {}
 
@@ -304,8 +281,9 @@ class MVELaneChangeAndOverTake(MVE):
                         new_obstacle_states = next_obst_states)
         '''
 
+        next_graph, next_normed_graph = self.get_graph(next_env_state)
 
-        return self.get_graph(next_env_state), next_dsYddts, reward, cost, cost_real, done, info
+        return next_graph, next_normed_graph, reward, cost, cost_real, done, info
 
     def get_reward(self, graph: MVEEnvGraphsTuple, ad_action: Action) -> Reward:
         num_agents = graph.env_states.agent.shape[0]
@@ -332,7 +310,7 @@ class MVELaneChangeAndOverTake(MVE):
         a_agent_v_b_x_kmph = jnp.einsum('aij, ai -> aj', a22_Q_agent, a2_agent_v_kmph)[:, 0]
 
         # 待比较的state
-        a4_goals = jnp.concatenate([a2_goal_pos_m, a_goal_v_b_x_kmph[:, None], a_goal_theta_deg[:, None]], axis=1)
+        a4_goals = jnp.concatenate([a2_goal_pos_m, a_goal_v_b_x_kmph[:, None], a_agent_theta_deg[:, None]], axis=1)
         a4_agents = jnp.concatenate([a2_agent_pos_m, a_agent_v_b_x_kmph[:, None], a_agent_theta_deg[:, None]], axis=1)
         a4_e = a4_agents - a4_goals
 
@@ -441,7 +419,7 @@ class MVELaneChangeAndOverTake(MVE):
     @override
     def render_video(
             self,
-            rollout: Rollout,
+            rollout: Rollout_NormedGraph,
             video_path: pathlib.Path,
             Ta_is_unsafe=None,
             viz_opts: Optional[dict] = None,
@@ -483,23 +461,25 @@ class MVELaneChangeAndOverTake(MVE):
         edge_goal_color = goal_color
 
         # plot obstacles
-        obsts_state = graph0.type_nodes(type_idx=MVE.OBST, n_type=self.num_obsts)
-        # state: x, y, vx, vy, θ, dθ/dt, bw, bh
-        obsts_pos = obsts_state[:, :2]
-        obsts_theta = obsts_state[:, 4]
-        obsts_bb_size = obsts_state[:, 6:8]
-        obsts_radius = jnp.linalg.norm(obsts_bb_size, axis=1)
-        plot_obsts_arrow = [FancyArrow(x=obsts_pos[i,0], y=obsts_pos[i,1],
-                                       dx=jnp.cos(obsts_theta[i]*jnp.pi/180)*obsts_radius[i]/2,
-                                       dy=jnp.sin(obsts_theta[i]*jnp.pi/180)*obsts_radius[i]/2,
-                                       length_includes_head=True,
-                                       width=0.3, color=obst_color, alpha=1.0) for i in range(len(obsts_theta))]
-        plot_obsts_rec = [plt.Rectangle(xy=tuple(obsts_pos[i,:]-obsts_bb_size[i,:]/2),
-                                        width=obsts_bb_size[i,0], height=obsts_bb_size[i,1],
-                                        angle=obsts_theta[i], rotation_point='center',
-                                            color=obst_color, linewidth=0.0, alpha=0.6) for i in range(len(obsts_theta))]
-        col_obsts = MutablePatchCollection(plot_obsts_arrow+plot_obsts_rec, match_original=True, zorder=5)
-        ax.add_collection(col_obsts)
+        num_obsts = graph0.env_states.obstacle.shape[0]
+        if num_obsts > 0:
+            obsts_state = graph0.type_nodes(type_idx=MVE.OBST, n_type=self.num_obsts)
+            # state: x, y, vx, vy, θ, dθ/dt, bw, bh
+            obsts_pos = obsts_state[:, :2]
+            obsts_theta = obsts_state[:, 4]
+            obsts_bb_size = obsts_state[:, 6:8]
+            obsts_radius = jnp.linalg.norm(obsts_bb_size, axis=1)
+            plot_obsts_arrow = [FancyArrow(x=obsts_pos[i,0], y=obsts_pos[i,1],
+                                           dx=jnp.cos(obsts_theta[i]*jnp.pi/180)*obsts_radius[i]/2,
+                                           dy=jnp.sin(obsts_theta[i]*jnp.pi/180)*obsts_radius[i]/2,
+                                           length_includes_head=True,
+                                           width=0.3, color=obst_color, alpha=1.0) for i in range(len(obsts_theta))]
+            plot_obsts_rec = [plt.Rectangle(xy=tuple(obsts_pos[i,:]-obsts_bb_size[i,:]/2),
+                                            width=obsts_bb_size[i,0], height=obsts_bb_size[i,1],
+                                            angle=obsts_theta[i], rotation_point='center',
+                                                color=obst_color, linewidth=0.0, alpha=0.6) for i in range(len(obsts_theta))]
+            col_obsts = MutablePatchCollection(plot_obsts_arrow+plot_obsts_rec, match_original=True, zorder=5)
+            ax.add_collection(col_obsts)
 
         # plot agents
         agents_state = graph0.type_states(type_idx=MVE.AGENT, n_type=self.num_agents)
@@ -593,16 +573,19 @@ class MVELaneChangeAndOverTake(MVE):
                 plot_agents_rec[ii].set_xy(xy=tuple(n_pos_t[ii, :]-n_bb_size_t[ii, :]/2))
                 plot_agents_rec[ii].set_angle(angle=n_theta_t[ii])
                 agent_labels[ii].set_position(n_pos_t[ii, :])
+
             # update obstacles' positions
-            for ii in range(self.num_obsts):
-                 plot_obsts_arrow[ii].set_data(x=n_pos_t[self.num_agents+n_goals+ii, 0],
-                                                y=n_pos_t[self.num_agents+n_goals+ii, 1],
-                                                dx=jnp.cos(n_theta_t[self.num_agents+n_goals+ii]*jnp.pi/180)*n_radius[
-                                                    self.num_agents+n_goals+ii]/2,
-                                                dy=jnp.sin(n_theta_t[self.num_agents+n_goals+ii]*jnp.pi/180)*n_radius[
-                                                    self.num_agents+n_goals+ii]/2)
-                 plot_obsts_rec[ii].set_xy(xy=tuple(n_pos_t[self.num_agents+n_goals+ii, :]-n_bb_size_t[self.num_agents+n_goals+ii, :]/2))
-                 plot_obsts_rec[ii].set_angle(angle=n_theta_t[self.num_agents+n_goals+ii])
+            num_obsts = graph.env_states.obstacle.shape[0]
+            if num_obsts > 0:
+                for ii in range(self.num_obsts):
+                     plot_obsts_arrow[ii].set_data(x=n_pos_t[self.num_agents+n_goals+ii, 0],
+                                                    y=n_pos_t[self.num_agents+n_goals+ii, 1],
+                                                    dx=jnp.cos(n_theta_t[self.num_agents+n_goals+ii]*jnp.pi/180)*n_radius[
+                                                        self.num_agents+n_goals+ii]/2,
+                                                    dy=jnp.sin(n_theta_t[self.num_agents+n_goals+ii]*jnp.pi/180)*n_radius[
+                                                        self.num_agents+n_goals+ii]/2)
+                     plot_obsts_rec[ii].set_xy(xy=tuple(n_pos_t[self.num_agents+n_goals+ii, :]-n_bb_size_t[self.num_agents+n_goals+ii, :]/2))
+                     plot_obsts_rec[ii].set_angle(angle=n_theta_t[self.num_agents+n_goals+ii])
 
             # update edges
             e_edge_index_t = np.stack([graph.senders, graph.receivers], axis=0)
@@ -715,34 +698,51 @@ class MVELaneChangeAndOverTake(MVE):
         return agent_goal_edges + agent_obst_edges # 跟踪任务debug
 
     @override
-    def get_graph(self, env_state: MVEEnvState, obst_as_agent:bool = False) -> MVEEnvGraphsTuple:
+    def get_graph(self, env_state: MVEEnvState, obst_as_ego: bool = False) -> Tuple[MVEEnvGraphsTuple, MVEEnvGraphsTuple]:
+        del obst_as_ego # 手动生成场景，所以不需要这个参数了
+        """输出一个原始图，一个归一化图"""
         num_agents = env_state.agent.shape[0]
         num_goals = env_state.goal.shape[0]
         num_obsts = env_state.obstacle.shape[0]
         assert num_agents > 0 and num_goals > 0, "至少需要设定agent和goal!"
         assert num_agents == num_goals, "每一个agent对应一个goal"
+
+        # normalization information
+        aS_agent_states = env_state.agent
+        aS_goal_states = env_state.goal
+        oS_obst_states = env_state.obstacle
+        x_center = aS_agent_states[:, 0].mean()
+        aS_agent_states_normed = aS_agent_states.at[:, 0].set(aS_agent_states[:, 0] - x_center)
+        aS_goal_states_normed = aS_goal_states.at[:, 0].set(aS_goal_states[:, 0] - x_center)
+        oS_obst_states_normed = oS_obst_states.at[:, 0].set(oS_obst_states[:, 0] - x_center)
+
         # node features
-        # states
         node_feats = jnp.zeros((num_agents + num_goals + num_obsts, self.node_dim))
-        node_feats = node_feats.at[:num_agents, :self.state_dim].set(env_state.agent)
-        node_feats = node_feats.at[num_agents: num_agents + num_goals, :self.state_dim].set(env_state.goal)
+        normed_node_feats = jnp.zeros_like(node_feats)
+        node_feats = node_feats.at[:num_agents, :self.state_dim].set(aS_agent_states)
+        normed_node_feats = normed_node_feats.at[:num_agents, :self.state_dim].set(aS_agent_states_normed)
+        node_feats = node_feats.at[num_agents: num_agents + num_goals, :self.state_dim].set(aS_goal_states)
+        normed_node_feats = normed_node_feats.at[num_agents: num_agents + num_goals, :self.state_dim].set(aS_goal_states_normed)
         if num_obsts > 0:
             node_feats = node_feats.at[num_agents + num_goals:, :self.state_dim].set(env_state.obstacle)
+            normed_node_feats = normed_node_feats.at[num_agents + num_goals:, :self.state_dim].set(oS_obst_states_normed)
 
         # bounding box长宽
         # state: x y vx vy θ dθdt bw bh
-        if obst_as_agent:
-            node_feats = node_feats.at[:num_agents, 6:8].set(self.params["obst_bb_size"])
-        else:
-            node_feats = node_feats.at[:num_agents, 6:8].set(self.params["ego_bb_size"])
+        node_feats = node_feats.at[:num_agents, 6:8].set(self.params["ego_bb_size"])
+        normed_node_feats = normed_node_feats.at[:num_agents, 6:8].set(self.params["ego_bb_size"])
         if num_obsts > 0:
             node_feats = node_feats.at[num_agents + num_goals:, 6:8].set(self.params["obst_bb_size"])
+            normed_node_feats = normed_node_feats.at[num_agents + num_goals:, 6:8].set(self.params["obst_bb_size"])
 
         # indicators
         node_feats = node_feats.at[:num_agents, -1].set(1.0)
+        normed_node_feats = normed_node_feats.at[:num_agents, -1].set(1.0)
         node_feats = node_feats.at[num_agents: num_agents + num_goals, -2].set(1.0)
+        normed_node_feats = normed_node_feats.at[num_agents: num_agents + num_goals, -2].set(1.0)
         if num_obsts > 0:
             node_feats = node_feats.at[num_agents + num_goals:, -3].set(1.0)
+            normed_node_feats = normed_node_feats.at[num_agents + num_goals:, -3].set(1.0)
 
         # node type
         node_type = -jnp.ones((num_agents + num_goals + num_obsts), dtype=jnp.int32)
@@ -755,18 +755,29 @@ class MVELaneChangeAndOverTake(MVE):
         edge_blocks = self.edge_blocks(env_state)
 
         # create graph
-        states = jnp.concatenate([node_feats[:num_agents, :-3], node_feats[num_agents: num_agents + num_goals, :-3]],
-                                 axis=0)
+        states = node_feats[:num_agents + num_goals, :-3]
+        normed_states = normed_node_feats[:num_agents + num_goals, :-3]
+
         if num_obsts > 0:
             states = jnp.concatenate([states, node_feats[num_agents + num_goals:, :-3]], axis=0)
+            normed_states = jnp.concatenate([normed_states, normed_node_feats[num_agents + num_goals:, :-3]], axis=0)
             new_env_state = MVEEnvState(node_feats[:num_agents, :-3],
                                         node_feats[num_agents: num_agents + num_goals, :-3],
                                         node_feats[num_agents + num_goals:, :-3])
+            new_normed_env_state = MVEEnvState(normed_node_feats[:num_agents, :-3],
+                                               normed_node_feats[num_agents: num_agents + num_goals, :-3],
+                                               normed_node_feats[num_agents + num_goals:, :-3])
         else:
             new_env_state = MVEEnvState(node_feats[:num_agents, :-3],
                                         node_feats[num_agents: num_agents + num_goals, :-3],
                                         jnp.empty((0, self.state_dim)))
-        return GetGraph(node_feats, node_type, edge_blocks, new_env_state, states).to_padded()
+            new_normed_env_state = MVEEnvState(normed_node_feats[:num_agents, :-3],
+                                               normed_node_feats[num_agents: num_agents + num_goals, :-3],
+                                               jnp.empty((0, self.state_dim)))
+
+        graph = GetGraph(node_feats, node_type, edge_blocks, new_env_state, states).to_padded()
+        normed_graph = GetGraph(normed_node_feats, node_type, edge_blocks, new_normed_env_state, normed_states).to_padded()
+        return graph, normed_graph
 
     @override
     def state_lim(self, state: Optional[State]) -> Tuple[State, State]:
@@ -799,60 +810,3 @@ class MVELaneChangeAndOverTake(MVE):
     def unsafe_mask(self, graph: GraphsTuple) -> Array:
         _, cost_real = self.get_cost(graph)
         return jnp.any(cost_real >= 0.0, axis=-1)
-
-    def plot_agent_speed_from_rollout(self, rollout: Rollout, save_path=None, use_body_frame=False):
-        """
-        绘制 agent 速度图
-        :param rollout: 一个包含图数据的 Rollout 对象
-        :param save_path: 如果传入路径，就保存为 png 文件，否则直接显示
-        :param use_body_frame: 是否使用车身坐标系进行速度转换
-        """
-        T = len(rollout.graph.n_node)  # 时间步数
-        A = self.num_agents  # 从类的实例获取 agent 数量
-        vx_TA = np.zeros((T, A), dtype=np.float32)
-        vy_TA = np.zeros((T, A), dtype=np.float32)
-
-        # 遍历所有时间步，提取速度信息
-        for t in range(T):
-            g = tree_index(rollout.graph, t)
-            vx = np.array(g.states[:A, 2])
-            vy = np.array(g.states[:A, 3])
-            if use_body_frame:
-                # 转换到车身坐标系
-                theta_deg = np.array(g.states[:A, 4])
-                theta = theta_deg * np.pi / 180.0
-                c, s = np.cos(theta), np.sin(theta)
-                vbx = c * vx + s * vy
-                vby = -s * vx + c * vy
-                vx, vy = vbx, vby
-            vx_TA[t] = vx
-            vy_TA[t] = vy
-
-        # 计算总速度
-        speed_TA = np.sqrt(vx_TA**2 + vy_TA**2)  # km/h
-        time = np.arange(T) * float(self.dt)  # 转换为时间秒
-
-        # 绘制图形
-        fig, axes = plt.subplots(3, 1, figsize=(10, 8), sharex=True)
-        for a in range(A):
-            axes[0].plot(time, vx_TA[:, a], label=f"agent{a}")
-        axes[0].set_ylabel("vx (km/h)")
-        axes[0].legend(ncol=4, fontsize=8)
-        for a in range(A):
-            axes[1].plot(time, vy_TA[:, a], label=f"agent{a}")
-        axes[1].set_ylabel("vy (km/h)")
-        for a in range(A):
-            axes[2].plot(time, speed_TA[:, a], label=f"agent{a}")
-        axes[2].set_ylabel("|v| (km/h)")
-        axes[2].set_xlabel("time (s)")
-
-        title = "Agent speed (body frame)" if use_body_frame else "Agent speed (world frame)"
-        fig.suptitle(title)
-        fig.tight_layout()
-
-        # 保存图像或展示
-        if save_path is not None:
-            plt.savefig(save_path, dpi=150)
-            plt.close(fig)
-        else:
-            plt.show()

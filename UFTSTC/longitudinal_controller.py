@@ -68,13 +68,13 @@ class PIDController:
         # state: x, y, vx, vy, θ, dθ/dt, bw, bh
         # 参数提取
         a2_goal_v_kmph = aS_goals_states[:, 2:4]
-        a_goal_theta_deg = aS_goals_states[:, 4]
+        a_goal_theta_rad = aS_goals_states[:, 4] * jnp.pi/180
         a2_agent_v_kmph = aS_agents_states[:, 2:4]
-        a_agent_theta_deg = aS_agents_states[:, 4]
+        a_agent_theta_rad = aS_agents_states[:, 4] * jnp.pi/180
 
         # 旋转矩阵计算
-        a22_Q_goal = jax.vmap(calc_2d_rot_matrix, in_axes=(0))(a_goal_theta_deg)
-        a22_Q_agent = jax.vmap(calc_2d_rot_matrix, in_axes=(0))(a_agent_theta_deg)
+        a22_Q_goal = jax.vmap(calc_2d_rot_matrix, in_axes=(0))(a_goal_theta_rad)
+        a22_Q_agent = jax.vmap(calc_2d_rot_matrix, in_axes=(0))(a_agent_theta_rad)
 
         # 自车坐标系下的横纵向速度计算
         a2_goal_v_b_kmph = jnp.einsum('aij, ai -> aj', a22_Q_goal, a2_goal_v_kmph)

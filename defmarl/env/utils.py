@@ -9,7 +9,7 @@ from jax.lax import while_loop
 
 from ..utils.typing import Array, Radius, BoolScalar, Pos, PRNGKey, AgentState, PathRefs
 from ..utils.utils import calc_linear_eff, calc_quintic_eff, const_f, linear_f, quintic_polynomial_f, sin_f, \
-    three_sec_f, six_sec_f, calc_2d_rot_matrix
+    three_sec_f, six_sec_f, calc_2d_rot_matrix, normalize_angle
 from .obstacle import Obstacle
 
 
@@ -396,43 +396,107 @@ def generate_lanechange_goals(way_points_key:Array, centers: Array, agents: Agen
 @jax.jit
 def relative_state(ego_state: AgentState, target_state: AgentState) -> AgentState:
     """计算target在ego连体基下的状态量"""
-    convert_vec = jnp.array([1, 1, 3.6, 3.6, 180/jnp.pi, 180/jnp.pi, 1, 1]) # eg. km/h / convert_vec -> m/s
+    convert_vec = jnp.array([1, 1, 3.6, 3.6, 180 / jnp.pi, 180 / jnp.pi, 1, 1])
     ego_state_metric = ego_state / convert_vec
     target_state_metric = target_state / convert_vec
 
     # 参数提取
     ego_pos_m, target_pos_m = ego_state_metric[:2], target_state_metric[:2]
-    ego_v_mps, target_v_mps = ego_state_metric[2:4], target_state_metric[2:4]
+    ego_v_b_mps, target_v_b_mps = ego_state_metric[2:4], target_state_metric[2:4] # 各自的车身坐标系下的速度
     ego_theta_rad, target_theta_rad = ego_state_metric[4], target_state_metric[4]
     ego_omega_radps, target_omega_radps = ego_state_metric[5], target_state_metric[5]
     ego_b_m, target_b_m = ego_state_metric[6:], target_state_metric[6:]
-    Q = calc_2d_rot_matrix(ego_theta_rad * 180/jnp.pi)
 
-    # 相对角速度与相对角加速度
+    # 分别计算自车和目标车的旋转矩阵
+    Q_ego = calc_2d_rot_matrix(ego_theta_rad)
+    Q_target = calc_2d_rot_matrix(target_theta_rad)
+
+    ego_v_mps = Q_ego @ ego_v_b_mps  # ego在世界坐标系下的速度
+    target_v_mps = Q_target @ target_v_b_mps  # target在世界坐标系下的速度
+
+    # 相对角与角速度
     rel_theta_rad = target_theta_rad - ego_theta_rad
     rel_omega_radps = target_omega_radps - ego_omega_radps
 
-    # 相对坐标
-    rel_pos_m = Q.T @ (target_pos_m - ego_pos_m)
-    rel_x_m = rel_pos_m[0]
-    rel_y_m = rel_pos_m[1]
+    # 相对坐标 (投影到ego车身坐标系)
+    rel_pos_m = Q_ego.T @ (target_pos_m - ego_pos_m)
+    rel_x_m, rel_y_m = rel_pos_m[0], rel_pos_m[1]
 
-    # 相对方向角与距离
-    rel_angle_rad = jnp.arctan(rel_y_m / (rel_x_m + 1e-4))
-    rel_dist_m = jnp.linalg.norm(rel_pos_m)
-
-    # 相对速度
-    rel_v_mps = Q.T @ (target_v_mps - ego_v_mps +
-                       jnp.array([ego_omega_radps * rel_dist_m * jnp.sin(rel_angle_rad + ego_theta_rad),
-                                 -ego_omega_radps * rel_dist_m * jnp.cos(rel_angle_rad + ego_theta_rad)]))
+    # 相对速度 (代数简化版)
+    # 项1：两车在世界坐标系下的绝对速度差，投影到ego坐标系
+    v_rel_trans_E = Q_ego.T @ (target_v_mps - ego_v_mps)
+    # 项2：ego自身旋转引起的牵连速度效应 (叉乘的2D矩阵展开)
+    v_rel_rot_E = jnp.array([ego_omega_radps * rel_y_m, -ego_omega_radps * rel_x_m])
+    # 相对坐标的严格物理导数
+    rel_v_mps = v_rel_trans_E + v_rel_rot_E
 
     # 相对包围盒参数
     rel_b_m = target_b_m - ego_b_m
 
     # 整合与单位转换
-    rel_state_metric = jnp.concatenate([rel_pos_m, rel_v_mps, jnp.array([rel_theta_rad]), jnp.array([rel_omega_radps]),
-                                        rel_b_m])
+    rel_state_metric = jnp.concatenate([
+        rel_pos_m,
+        rel_v_mps,
+        jnp.array([rel_theta_rad, rel_omega_radps]),
+        rel_b_m
+    ])
+
     rel_state = rel_state_metric * convert_vec
+    rel_state = rel_state.at[4].set(normalize_angle(rel_state[4]))  # Δθ限制在[-180, 180]°
+
+    assert rel_state.shape == ego_state.shape == target_state.shape
+    return rel_state
+
+@jax.jit
+def relative_state_delta_state(ego_state: AgentState, target_state: AgentState) -> AgentState:
+    """计算target在ego连体基下的状态量"""
+    convert_vec = jnp.array([1, 1, 3.6, 3.6, 180 / jnp.pi, 180 / jnp.pi, 180/jnp.pi, 1, 1])
+    ego_state_metric = ego_state / convert_vec
+    target_state_metric = target_state / convert_vec
+
+    # 参数提取
+    ego_pos_m, target_pos_m = ego_state_metric[:2], target_state_metric[:2]
+    ego_v_b_mps, target_v_b_mps = ego_state_metric[2:4], target_state_metric[2:4] # 各自的车身坐标系下的速度
+    ego_theta_rad, target_theta_rad = ego_state_metric[4], target_state_metric[4]
+    ego_omega_radps, target_omega_radps = ego_state_metric[5], target_state_metric[5]
+    ego_other, target_other = ego_state_metric[6:], target_state_metric[6:]
+
+    # 分别计算自车和目标车的旋转矩阵
+    Q_ego = calc_2d_rot_matrix(ego_theta_rad)
+    Q_target = calc_2d_rot_matrix(target_theta_rad)
+
+    ego_v_mps = Q_ego @ ego_v_b_mps  # ego在世界坐标系下的速度
+    target_v_mps = Q_target @ target_v_b_mps  # target在世界坐标系下的速度
+
+    # 相对角与角速度
+    rel_theta_rad = target_theta_rad - ego_theta_rad
+    rel_omega_radps = target_omega_radps - ego_omega_radps
+
+    # 相对坐标 (投影到ego车身坐标系)
+    rel_pos_m = Q_ego.T @ (target_pos_m - ego_pos_m)
+    rel_x_m, rel_y_m = rel_pos_m[0], rel_pos_m[1]
+
+    # 相对速度 (代数简化版)
+    # 项1：两车在世界坐标系下的绝对速度差，投影到ego坐标系
+    v_rel_trans_E = Q_ego.T @ (target_v_mps - ego_v_mps)
+    # 项2：ego自身旋转引起的牵连速度效应 (叉乘的2D矩阵展开)
+    v_rel_rot_E = jnp.array([ego_omega_radps * rel_y_m, -ego_omega_radps * rel_x_m])
+    # 相对坐标的严格物理导数
+    rel_v_mps = v_rel_trans_E + v_rel_rot_E
+
+    # 其他参数(δ_r, bbw, bbh)
+    rel_other = target_other - ego_other
+
+    # 整合与单位转换
+    rel_state_metric = jnp.concatenate([
+        rel_pos_m,
+        rel_v_mps,
+        jnp.array([rel_theta_rad, rel_omega_radps]),
+        rel_other
+    ])
+
+    rel_state = rel_state_metric * convert_vec
+    rel_state = rel_state.at[4].set(normalize_angle(rel_state[4]))  # Δθ限制在[-180, 180]°
 
     assert rel_state.shape == ego_state.shape == target_state.shape
     return rel_state
