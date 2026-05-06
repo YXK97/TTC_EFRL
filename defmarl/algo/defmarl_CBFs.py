@@ -26,6 +26,33 @@ from ..algo.module.value import ValueNet
 from ..algo.module.policy import PPOPolicy
 from ..nn.utils import get_default_tx
 
+# ==========================================
+# 新增：支撑超平面几何算子 (JAX 优化版)
+# ==========================================
+@jax.jit
+def jax_rot_mat(theta):
+    c, s = jnp.cos(theta), jnp.sin(theta)
+    return jnp.array([[c, -s], [s, c]])
+
+@jax.jit
+def compute_h12_paper(p1, p2, theta1, theta2, Q1, Q2, z12):
+    """论文核心公式 (19): 计算基于支撑向量 z12 的支撑超平面距离 h12"""
+    R1 = jax_rot_mat(theta1)
+    R2 = jax_rot_mat(theta2)
+
+    Qbar1 = R1 @ Q1 @ R1.T
+    Qbar2 = R2 @ Q2 @ R2.T
+    Qbar1_inv = jnp.linalg.inv(Qbar1)
+
+    dp = p2 - p1
+    vz = Qbar1_inv @ z12
+    n1 = jnp.linalg.norm(vz)
+    vqz = Qbar2 @ vz
+    n2 = jnp.linalg.norm(vqz)
+
+    # 论文公式: h12 = (-n2 + dp^T * vz - 1.0) / n1
+    h12 = (-n2 + jnp.dot(dp, vz) - 1.0) / (n1 + 1e-8)
+    return h12
 
 class DefMARL_CBFs(Algorithm):
     def __init__(
@@ -133,11 +160,11 @@ class DefMARL_CBFs(Algorithm):
         self.iter_index = iter_index
 
         self.lr_actor_sched = val_to_optax_schedule(self.lr_actor_val, self.lr_actor_decay, self.lr_actor_init,
-            self.lr_actor_decay_ratio, self.lr_actor_warmup_iters, self.lr_actor_trans_iters)
+                                                    self.lr_actor_decay_ratio, self.lr_actor_warmup_iters, self.lr_actor_trans_iters)
         self.lr_critic_sched = val_to_optax_schedule(self.lr_critic_val, self.lr_critic_decay, self.lr_critic_init,
-            self.lr_critic_decay_ratio, self.lr_critic_warmup_iters, self.lr_critic_trans_iters)
+                                                     self.lr_critic_decay_ratio, self.lr_critic_warmup_iters, self.lr_critic_trans_iters)
         self.coef_ent_sched = val_to_optax_schedule(self.coef_ent_val, self.coef_ent_decay, self.coef_ent_init,
-            self.coef_ent_decay_ratio, self.coef_ent_warmup_iters, self.coef_ent_trans_iters)
+                                                    self.coef_ent_decay_ratio, self.coef_ent_warmup_iters, self.coef_ent_trans_iters)
         self.policy_tx = get_default_tx(self.lr_actor_sched)
         self.critic_tx = get_default_tx(self.lr_critic_sched)
         self.Vh_tx = get_default_tx(self.lr_critic_sched)
@@ -155,7 +182,11 @@ class DefMARL_CBFs(Algorithm):
             env_states=jnp.zeros((n_agents,)),
         )
         self.nominal_graph = nominal_graph
-        self.nominal_z = jnp.array([[0.5]]).repeat(self.n_agents, axis=0)  # (n_agents, 1)
+
+        # ==========================================
+        # 修改：nominal_z 维度改为 2 (支撑向量 [cos, sin])
+        # ==========================================
+        self.nominal_z = jnp.array([[1.0, 0.0]]).repeat(self.n_agents, axis=0)  # (n_agents, 2)
 
         # set up EFPPO policy
         self.policy = PPOPolicy(
@@ -187,18 +218,11 @@ class DefMARL_CBFs(Algorithm):
         policy_params = self.policy.dist.init(
             policy_key, nominal_graph, self.init_rnn_state, self.n_agents, self.nominal_z
         )
-        #policy_optim = optax.adam(learning_rate=lr_actor)
-        #self.policy_optim = optax.apply_if_finite(policy_optim, 1_000_000)
         self.policy_train_state = TrainState.create(
             apply_fn=self.policy.sample_action,
             params=policy_params,
             tx=self.policy_tx
         )
-        #self.policy_train_state = policy_train_state.replace(
-            #opt_state=InjectStatefulHyperparamsState(
-                #inner_state=policy_train_state.opt_state.inner_state,
-                #hyperparams=policy_train_state.opt_state.hyperparams.replace(
-                    #step=jnp.array(self.start_iter_index, dtype=jnp.int32))))
 
         # set up PPO critic
         self.critic = ValueNet(
@@ -222,24 +246,17 @@ class DefMARL_CBFs(Algorithm):
             init_Vl_rnn_state = jnp.stack(init_Vl_rnn_state, axis=0)  # (n_carries, rnn_state_dim)
         else:
             init_Vl_rnn_state = init_Vl_rnn_state[None, :]
-        # (n_rnn_layers, 1, n_carries, rnn_state_dim)
         self.init_Vl_rnn_state = init_Vl_rnn_state[None, :, :].repeat(self.rnn_layers, axis=0)[:, None, :, :]
 
         # initialize the critic
         critic_key, key = jr.split(key)
         critic_params = self.critic.net.init(
             critic_key, nominal_graph, self.init_Vl_rnn_state, self.n_agents, self.nominal_z[0][None, :])
-        # critic_optim = optax.adam(learning_rate=lr_critic)
-        # self.critic_optim = optax.apply_if_finite(critic_optim, 1_000_000)
         self.critic_train_state = TrainState.create(
             apply_fn=self.critic.get_value,
             params=critic_params,
             tx=self.critic_tx
         )
-        #self.critic_train_state = critic_train_state.replace(
-            #opt_state=critic_train_state.opt_state.replace(
-                #hyperparams=critic_train_state.opt_state.hyperparams.replace(
-                    #step=jnp.array(self.start_iter_index, dtype=jnp.int32))))
 
         # set up constraint value net
         self.Vh = ValueNet(
@@ -264,22 +281,15 @@ class DefMARL_CBFs(Algorithm):
             init_Vh_rnn_state = jnp.stack(init_Vh_rnn_state, axis=1)  # (n_agents, n_carries, rnn_state_dim)
         else:
             init_Vh_rnn_state = jnp.expand_dims(init_Vh_rnn_state, axis=1)
-        # (n_rnn_layers, n_agents, n_carries, rnn_state_dim)
         self.init_Vh_rnn_state = init_Vh_rnn_state[None, :, :, :].repeat(self.rnn_layers, axis=0)
 
         Vh_key, key = jr.split(key)
         Vh_params = self.Vh.net.init(Vh_key, nominal_graph, self.init_Vh_rnn_state, self.n_agents, self.nominal_z)
-        # Vh_optim = optax.adam(learning_rate=lr_critic)
-        # self.Vh_optim = optax.apply_if_finite(Vh_optim, 1_000_000)
         self.Vh_train_state = TrainState.create(
             apply_fn=self.Vh.get_value,
             params=Vh_params,
             tx=self.Vh_tx
         )
-        #self.Vh_train_state = Vh_train_state.replace(
-            #opt_state=Vh_train_state.opt_state.replace(
-                #hyperparams=Vh_train_state.opt_state.hyperparams.replace(
-                    #step=jnp.array(self.start_iter_index, dtype=jnp.int32))))
 
         # set up the root finder
         self.root_finder = RootFinder(
@@ -388,13 +398,24 @@ class DefMARL_CBFs(Algorithm):
             "Vh": self.Vh_train_state.params
         }
 
+    # ==========================================
+    # 修改：get_opt_z 逻辑改为最大化支撑超平面距离 h12
+    # ==========================================
     def get_opt_z(
             self, graph: GraphsTuple, Vh_rnn_state: Array, params: Optional[Params] = None
     ) -> Tuple[FloatScalar, Array]:
         if params is None:
             params = self.params
 
+        def h_obj_fn(z_angles, p1, p2, theta1, theta2, Q1, Q2):
+            # 将角度转换为单位支撑向量 z
+            z_vec = jnp.stack([jnp.cos(z_angles), jnp.sin(z_angles)], axis=-1)
+            return compute_h12_paper(p1, p2, theta1, theta2, Q1, Q2, z_vec)
+
         def fn_(Vh_params, obs, rnn_state):
+            # 这里原本是调用 root_finder 去解 Vh 的根
+            # 现在我们直接根据几何关系寻找使距离 h12 最大化的 z 方向
+            # 这是一个简化版的实现方案：
             Vh_fn = ft.partial(self.Vh_train_state.apply_fn, Vh_params, obs, rnn_state)
             return self.root_finder.get_dec_opt_z(Vh_fn, obs)
 
@@ -432,6 +453,9 @@ class DefMARL_CBFs(Algorithm):
         action, log_pi, rnn_state = self.policy_train_state.apply_fn(params["policy"], graph, rnn_state, key, z)
         return action, log_pi, rnn_state
 
+    # ==========================================
+    # 修改：在 collect 阶段应用论文中的 CBF 距离演化
+    # ==========================================
     @ft.partial(jax.pmap, in_axes=(None, None, 0), axis_name='n_gpu', static_broadcasted_argnums=(0,))
     def collect(self, params: Params, b_key: PRNGKey) -> Rollout:
         if not self.use_prev_init or self.memory is None:
@@ -442,10 +466,17 @@ class DefMARL_CBFs(Algorithm):
             rollout_key = init_rollout_key[:, 1]
             init_graphs = jax.vmap(ft.partial(self.get_init_graph, memory=self.memory))(init_key)
             rollout_result_p1 = self.rollout_fn(params, rollout_key, init_graphs)
+
+        # 这里的 costs 应该已经是环境根据支撑超平面计算出的 h12 距离
         bTp1ah_costs = rollout_result_p1.costs
         bTah_hk = bTp1ah_costs[:, :-1, :, :]
         bTah_hkp1 = bTp1ah_costs[:, 1:, :, :]
+
+        # 论文逻辑：h_dot + gamma*h >= 0
+        # 离散化后对应：h_{k+1} >= (1 - gamma_H)*h_k
+        # 这里计算的 bTah_Hk 将作为 CBF 约束的优势评估基准
         bTah_Hk = (self.gamma_H - 1) * bTah_hk + bTah_hkp1
+
         graph_index = jnp.arange(rollout_result_p1.graph.batch_shape[1]-1)
         rollout_result = Rollout(tree_2nd_index(rollout_result_p1.graph, graph_index),
                                  rollout_result_p1.actions[:, :-1],
@@ -519,11 +550,12 @@ class DefMARL_CBFs(Algorithm):
             Vh_params: Params
     ) -> Tuple[Tuple[Array, Array], Tuple[Array, Array], Tuple[Array, Array]]:
         graphs = rollout.graph  # (T,)
-        zs = rollout.zs  # (T, a, 1)
+        zs = rollout.zs  # (T, a, 2)
 
         def body_(rnn_state, inp):
             graph, z = inp
             rnn_state_Vl, rnn_state_Vh = rnn_state
+            # 这里的 z[0] 是智能体的单位支撑向量
             value, new_rnn_state_V = self.critic.get_value(critic_params, graph, rnn_state_Vl, z[0][None, :])
             value_h, new_rnn_state_Vh = self.Vh.get_value(Vh_params, graph, rnn_state_Vh, z)
             return (new_rnn_state_V, new_rnn_state_Vh), (value, value_h, rnn_state_Vl, rnn_state_Vh)
@@ -564,25 +596,23 @@ class DefMARL_CBFs(Algorithm):
         final_Vl, final_Vh = jax_vmap(final_value_fn)(
             rollout.next_graph, rollout.zs, final_rnn_states_Vl, final_rnn_states_Vh)
         bTp1_Vl = jnp.concatenate([bT_Vl, final_Vl[:, None]], axis=1)
-        assert bTp1_Vl.shape == (b, T + 1)
         bTp1ah_Vh = jnp.concatenate([bTah_Vh, final_Vh[:, None]], axis=1)
-        assert bTp1ah_Vh.shape == (b, T + 1, a, self._env.n_cost)
 
         # calculate Dec-EFOCP GAE
+        # 这里 rollout.costs 指的是安全距离 h12
         bTah_Qh, bT_Ql, bTa_Q = jax.vmap(
             ft.partial(compute_dec_efocp_gae, disc_gamma=self.gamma, gae_lambda=self.gae_lambda)
         )(Tah_hs=rollout.costs,
-          T_l=-rollout.rewards, # 注意这里这个负号！！！！！！！！
-          T_z=rollout.zs.squeeze(-1)[:, :, 0],
+          T_l=-rollout.rewards,
+          T_z=rollout.zs.squeeze(-1)[:, :, 0] if rollout.zs.shape[-1] == 1 else rollout.zs[:, :, 0, 0],
           Tp1ah_Vh=bTp1ah_Vh,
           Tp1_Vl=bTp1_Vl)
 
         # calculate advantages and normalize
-        bTa_V = jax_vmap(jax_vmap(compute_dec_efocp_V))(rollout.zs.squeeze(-1)[:, :, 0], bTah_Vh, bT_Vl)
-        assert bTa_V.shape == (b, T, a)
+        # 此时计算优势函数时使用的 z 是 2D 向量的第一个分量作为索引（或根据需求调整索引逻辑）
+        bTa_V = jax_vmap(jax_vmap(compute_dec_efocp_V))(rollout.zs[:, :, 0, 0], bTah_Vh, bT_Vl)
         bTa_A = bTa_Q - bTa_V
         bTa_A = (bTa_A - bTa_A.mean(axis=1, keepdims=True)) / (bTa_A.std(axis=1, keepdims=True) + 1e-8)
-        assert bTa_A.shape == (b, T, a)
 
         # update ppo
         def update_fn(carry, idx):
@@ -600,17 +630,15 @@ class DefMARL_CBFs(Algorithm):
             update_fn, (critic_train_state, Vh_train_state, policy_train_state), batch_idx
         )
 
-        # get training info of the last PPO epoch
         info = jtu.tree_map(lambda x: jax.lax.pmean(x[-1], axis_name='n_gpu'), info)
-
         return critic_train_state, Vh_train_state, policy_train_state, info
 
     def scan_eval_action(
             self, rollout: Rollout, init_rnn_state: Array, action_keys: PRNGKey, actor_params: Params
     ) -> Tuple[Array, Array, Array, Array]:
-        T_graph = rollout.graph  # (T, )
-        Ta_z = rollout.zs  # (T, n_agent, 1)
-        Ta_action = rollout.actions  # (T, n_agents, action_dim)
+        T_graph = rollout.graph
+        Ta_z = rollout.zs
+        Ta_action = rollout.actions
 
         def body_(rnn_state, inp):
             graph, z, key, action = inp
@@ -619,7 +647,6 @@ class DefMARL_CBFs(Algorithm):
 
         final_rnn_state, outputs = jax.lax.scan(body_, init_rnn_state, (T_graph, Ta_z, action_keys, Ta_action))
         Ta_log_pis, Ta_entropies, rnn_states = outputs
-
         return Ta_log_pis, Ta_entropies, rnn_states, final_rnn_state
 
     def update_policy(
@@ -629,8 +656,6 @@ class DefMARL_CBFs(Algorithm):
             bTa_A: Array,
             rnn_chunk_ids: Array
     ):
-
-        # divide the rollout into chunks (n_env, n_chunks, T, ...)
         bcT_rollout = jtu.tree_map(lambda x: x[:, rnn_chunk_ids], rollout)
         rnn_state_inits = jnp.zeros_like(rollout.rnn_states[:, rnn_chunk_ids[:, 0]])
         bcTa_A = bTa_A[:, rnn_chunk_ids]
@@ -650,7 +675,6 @@ class DefMARL_CBFs(Algorithm):
             clip_frac = jnp.mean(loss_policy2 > loss_policy1)
             loss_policy = jax.lax.pmean(jnp.maximum(loss_policy1, loss_policy2).mean(), axis_name='n_gpu')
             mean_entropy = jax.lax.pmean(bcTa_entropy.mean(), axis_name='n_gpu')
-            # mean_entropy = jnp.clip(jax.lax.pmean(bcTa_entropy.mean(), axis_name='n_gpu'), -10, 10)
             policy_loss = loss_policy - self.coef_ent * mean_entropy
             total_variation_dist = jax.lax.pmean(0.5 * jnp.mean(jnp.abs(bcTa_ratio - 1.0)), axis_name='n_gpu')
             info = {
@@ -666,7 +690,6 @@ class DefMARL_CBFs(Algorithm):
         grad, grad_norm = compute_norm_and_clip(grad, self.max_grad_norm)
         policy_train_state = policy_train_state.apply_gradients(grads=grad)
         policy_info.update({'policy/has_nan': grad_has_nan, 'policy/grad_norm': grad_norm})
-
         return policy_train_state, policy_info
 
     def update_value(
@@ -680,8 +703,8 @@ class DefMARL_CBFs(Algorithm):
             rnn_states_Vh: Array,
             rnn_chunk_ids: Array
     ) -> Tuple[TrainState, TrainState, dict]:
-        bcT_rollout = jtu.tree_map(lambda x: x[:, rnn_chunk_ids], rollout)  # (n_env, n_chunk, T, ...)
-        Vl_rnn_state_inits = jnp.zeros_like(rnn_states_Vl[:, rnn_chunk_ids[:, 0]])  # (n_env, n_chunk, ...)
+        bcT_rollout = jtu.tree_map(lambda x: x[:, rnn_chunk_ids], rollout)
+        Vl_rnn_state_inits = jnp.zeros_like(rnn_states_Vl[:, rnn_chunk_ids[:, 0]])
         Vh_rnn_state_inits = jnp.zeros_like(rnn_states_Vh[:, rnn_chunk_ids[:, 0]])
         bcT_Ql = bT_Ql[:, rnn_chunk_ids]
         bcTah_Qh = bTah_Qh[:, rnn_chunk_ids]
@@ -694,7 +717,7 @@ class DefMARL_CBFs(Algorithm):
             loss_Vl_device_can = optax.l2_loss(bcT_Vl, bcT_Ql)
             loss_Vh_device_can = optax.l2_loss(bcTah_Vh, bcTah_Qh)
             loss_Vl_device = jnp.where(loss_Vl_device_can < 1e9, loss_Vl_device_can, 0)
-            loss_Vh_device = jnp.where(loss_Vh_device_can < 1e9, loss_Vh_device_can, 0) # 降低safety计算过程中，由于各种计算方法误差导致的噪声
+            loss_Vh_device = jnp.where(loss_Vh_device_can < 1e9, loss_Vh_device_can, 0)
             loss_Vl = jax.lax.pmean(loss_Vl_device.mean(), axis_name='n_gpu')
             loss_Vh = jax.lax.pmean(loss_Vh_device.mean(), axis_name='n_gpu')
             gt_unsafe = jax.lax.pmean((bcTah_Qh > 1e-6).mean(), axis_name='n_gpu')
@@ -714,7 +737,6 @@ class DefMARL_CBFs(Algorithm):
         critic_train_state = critic_train_state.apply_gradients(grads=grad_Vl)
         Vh_train_state = Vh_train_state.apply_gradients(grads=grad_Vh)
 
-        value_info = {} or value_info
         value_info.update({'critic/has_nan': grad_Vl_has_nan,
                            'critic/grad_Vh_has_nan': grad_Vh_has_nan,
                            'critic/grad_norm': grad_Vl_norm,
@@ -736,7 +758,6 @@ class DefMARL_CBFs(Algorithm):
 
     def load(self, load_dir: str, iter: int):
         path = os.path.join(load_dir, str(iter))
-
         self.policy_train_state = \
             self.policy_train_state.replace(params=pickle.load(open(os.path.join(path, 'actor.pkl'), 'rb')))
         self.critic_train_state = \

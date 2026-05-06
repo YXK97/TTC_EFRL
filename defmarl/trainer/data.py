@@ -49,3 +49,4 @@ class Record(NamedTuple):
     a_Yd:jnp.ndarray
     action_sum :jnp.ndarray
     T_goal_states:jnp.ndarray
+    BD_weighted_sum:jnp.ndarray

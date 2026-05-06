@@ -318,6 +318,7 @@ class UFTSTCController_pid:
         N = oS_obst_states.shape[0]
         Y = aS_agent_states[:, 1:2]
         obs_y = oS_obst_states[:, 1]
+        X = aS_agent_states[:, 0]
 
         lane_y = jnp.array([self.y_min, self.y_max], dtype=obs_y.dtype)
         Y0 = jnp.concatenate([obs_y, lane_y], axis=0)  # (O,)
@@ -343,7 +344,9 @@ class UFTSTCController_pid:
         BD_AO = jnp.concatenate([ao_BD, BD_lane], axis=1)
 
         # [静态车, 动态车, y_min边界, y_max边界]
-        w = jnp.array([0.7,0.5, 2.5, 1], dtype=BD_AO.dtype)  #
+        # w = jnp.array([0.7,1.1, 1.8, 1.5], dtype=BD_AO.dtype)  #
+        # w = jnp.array([0.7,0.5, 2, 1.5], dtype=BD_AO.dtype)  #
+        w = jnp.array([0.7,0, 0, 1], dtype=BD_AO.dtype)  #
         BD_weighted_sum = jnp.sum(BD_AO * ao_bar_sgn_Ye * w[None, :], axis=1)
 
         weight_obstacle = 1
@@ -359,8 +362,12 @@ class UFTSTCController_pid:
 
         # a_Psid_metric = self.k1*jnp.exp(-self.v*a_BD_sum)*a_Ye/a_vx - self.k2*a_BD_sum*a_sgn_Ye/((a_BD_int_sum+1)*a_vx) \
         #               +a_dYd/a_vx*0.6 - a_beta*0.1
-        a_Psid_metric = self.k1*jnp.exp(-self.v*a_BD_sum)*a_Ye/a_vx* - self.k2*BD_weighted_sum/((a_BD_int_sum+1)*a_vx) \
-                       *0 +a_dYd/a_vx*0.999 - a_beta*0
+        # 人工调整的系数
+        BD_control  = jnp.where(X <= -100, 0,
+                                jnp.where(X <= 50, 1, 0))
+
+        a_Psid_metric = self.k1*jnp.exp(-self.v*BD_control*a_BD_sum)*a_Ye/a_vx - self.k2*BD_control*BD_weighted_sum/((a_BD_int_sum+1)*a_vx) \
+                        +a_dYd/a_vx*0.5 - a_beta*0
         a_Psid_metric=jnp.clip(a_Psid_metric,-jnp.pi/2, jnp.pi/2)
         self.cur_step += 1
         jax.debug.print("step:{cur_step} \n"
@@ -375,7 +382,7 @@ class UFTSTCController_pid:
                         bd_lane=BD_lane,
                         Uod=Uod)
 
-        return a_Psid_metric,ao_BD, BD_lane ,a_Ye
+        return a_Psid_metric,ao_BD, BD_lane ,a_Ye ,BD_weighted_sum
 
 
     @ft.partial(jax.jit, static_argnums=(0,))
@@ -412,7 +419,7 @@ class UFTSTCController_pid:
         a_Yd, a_dYd, a_ddYd, a_dddYd = a4_dsYddt[:,0], a4_dsYddt[:,1], a4_dsYddt[:,2], a4_dsYddt[:,3]
 
         # 外环：仍然用你现在的方式算期望航向角（以及调试输出）
-        a_Psid_metric, ao_BD, BD_lane ,a_Ye= \
+        a_Psid_metric, ao_BD, BD_lane ,a_Ye,BD_weighted_sum= \
             self.calc_Psid_dPsid_ddPsid_metric(aS_agent_states, oS_obst_states,
                                                self.a_last_deltaf, a_Yd, a_dYd, a_ddYd, a_dddYd)
 
@@ -448,5 +455,5 @@ class UFTSTCController_pid:
         # 归一化给环境
         deltaf_norm = self.nomalize_deltaf(deltaf_clip_deg)
 
-        return deltaf_norm, a_Psid_metric*180/jnp.pi, ao_BD, BD_lane, a_Ye ,aS_agent_states , oS_obst_states , a_Yd , deltaf_clip_deg , T_goal_states
+        return deltaf_norm, a_Psid_metric*180/jnp.pi, ao_BD, BD_lane, a_Ye ,aS_agent_states , oS_obst_states , a_Yd , deltaf_clip_deg , T_goal_states ,BD_weighted_sum
 

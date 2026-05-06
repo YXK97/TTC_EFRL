@@ -62,7 +62,7 @@ def eval_rollout_uftstc(
 
     def body(data, xs):
         graph, dsYddt = data
-        a_deltaf, a_Psid_metric, ao_BD ,BD_lane, a_Ye ,aS_agent_states , oS_obst_states , a_Yd , deltaf_clip_deg , T_goal_states= lateral_controller_pid.calc_deltaf(graph, dsYddt)
+        a_deltaf, a_Psid_metric, ao_BD ,BD_lane, a_Ye ,aS_agent_states , oS_obst_states , a_Yd , deltaf_clip_deg , T_goal_states,BD_weighted_sum= lateral_controller_pid.calc_deltaf(graph, dsYddt)
         a_ax , a_ax_clip = longitudinal_controller.calc_ax(graph)
 
 
@@ -76,14 +76,14 @@ def eval_rollout_uftstc(
         next_graph, next_dsYddt, reward, cost, cost_real, done, info = env.step(graph, action)
         return ((next_graph, next_dsYddt),
                 (graph, action, action_sum, None, reward, cost, cost_real, done, None, next_graph, dsYddt, \
-                 a_ax, a_deltaf, a_Psid_metric, ao_BD, BD_lane, a_Ye ,aS_agent_states , oS_obst_states , a_Yd , T_goal_states))
+                 a_ax, a_deltaf, a_Psid_metric, ao_BD, BD_lane, a_Ye ,aS_agent_states , oS_obst_states , a_Yd , T_goal_states,BD_weighted_sum))
 
     _, (graphs, actions , action_sums , rnn_states, rewards, costs, costs_real, dones, log_pis, next_graphs, dsYddts, \
-        a_axs, a_deltafs, a_Psid_metrics, ao_BDs, BD_lanes, a_Yes, aS_agent_statess , oS_obst_statess , a_Yds , T_goal_statess) = (
+        a_axs, a_deltafs, a_Psid_metrics, ao_BDs, BD_lanes, a_Yes, aS_agent_statess , oS_obst_statess , a_Yds , T_goal_statess,BD_weighted_sums) = (
         jax.lax.scan(body,
                      (init_graph, init_dsYddt),
                      None,
                      length=env.max_episode_steps))
     rollout_data = Rollout(graphs, actions, rnn_states, rewards, costs, costs_real, dones, log_pis, next_graphs, dsYddts)
-    record_data = Record(a_axs, a_deltafs, a_Psid_metrics,ao_BDs,BD_lanes, a_Yes,aS_agent_statess , oS_obst_statess , a_Yds , action_sums , T_goal_statess)
+    record_data = Record(a_axs, a_deltafs, a_Psid_metrics,ao_BDs,BD_lanes, a_Yes,aS_agent_statess , oS_obst_statess , a_Yds , action_sums , T_goal_statess,BD_weighted_sums)
     return rollout_data, record_data

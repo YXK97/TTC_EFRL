@@ -2,9 +2,11 @@ from typing import Optional
 
 from defmarl.env.base import MultiAgentEnv
 from defmarl.env.mve_lanechangeANDovertake import MVELaneChangeAndOverTake
+from defmarl.env.mve_lowspeed import MVELaneChangeAndOverTake_LowSpeed
 
 ENV = {
     'MVELaneChange': MVELaneChangeAndOverTake,
+    'MVELaneChangeAndOverTake_LowSpeed': MVELaneChangeAndOverTake_LowSpeed,
 }
 
 

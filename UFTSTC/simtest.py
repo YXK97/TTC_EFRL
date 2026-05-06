@@ -7,13 +7,13 @@ import ipdb
 import numpy as np
 import yaml
 
-
 from UFTSTC.cvs_utils import dump_rollout_record_to_csv6
 
 
 from UFTSTC.longitudinal_controller import PIDController
 #from UFTSTC.latral_controller import UFTSTCController
 from UFTSTC.latral_controller_pid import UFTSTCController_pid
+
 from utils import parse_uftstc_controller_args, parse_pid_controller_args, eval_rollout_uftstc
 from defmarl.utils.utils import parse_jax_array
 
@@ -152,11 +152,11 @@ def main():
 
     # optional arguments
     # UFTSTC参数
-    parser.add_argument("--Af", type=float, default=15)
+    parser.add_argument("--Af", type=float, default=18)
     parser.add_argument("--r", type=float, default=15)
-    parser.add_argument("--mu", type=float, default=25)
+    parser.add_argument("--mu", type=float, default=30)
     parser.add_argument("--c", type=float, default=1.5)
-    parser.add_argument("--k1", type=float, default=0.8)#k1 k2避障 k3 k4 跟踪
+    parser.add_argument("--k1", type=float, default=0.4)#k1 k2避障 k3 k4 跟踪
     parser.add_argument("--k2", type=float, default=0.6)
     parser.add_argument("--k3", type=float, default=1.6)
     parser.add_argument("--k4", type=float, default=10)
@@ -173,9 +173,9 @@ def main():
     parser.add_argument("--max-integral", type=float, default=50.)
     parser.add_argument("--min-integral", type=float, default=-50.)
     # delat_PID参数
-    parser.add_argument("--kp_d", type=float, default=1.5)
-    parser.add_argument("--ki_d", type=float, default=0.5)
-    parser.add_argument("--kd_d", type=float, default=0.1)
+    parser.add_argument("--kp_d", type=float, default=1.9)
+    parser.add_argument("--ki_d", type=float, default=1)
+    parser.add_argument("--kd_d", type=float, default=0.5)
     parser.add_argument("--max-integral_d", type=float, default=50.)
     parser.add_argument("--min-integral_d", type=float, default=-50.)
     # 其他参数
@@ -201,9 +201,9 @@ def main():
     parser.add_argument("--y_min", type=float, default=-10, help="左车道边界 y")
     parser.add_argument("--y_max", type=float, default=10, help="右车道边界 y")
 
-    parser.add_argument("--Af_lane", type=float, default=18, help="道路边界势场幅值")
-    parser.add_argument("--r_lane", type=float, default=7, help="道路边界强惩罚距离 r")
-    parser.add_argument("--mu_lane", type=float, default=9, help="道路边界开始生效距离 mu")
+    parser.add_argument("--Af_lane", type=float, default=80, help="道路边界势场幅值")
+    parser.add_argument("--r_lane", type=float, default=6.5, help="道路边界强惩罚距离 r")
+    parser.add_argument("--mu_lane", type=float, default=10, help="道路边界开始生效距离 mu")
     parser.add_argument("--c_lane", type=float, default=1.5, help="道路边界势场形状参数 c")
 
     parser.add_argument("--leak_near_lane", type=float, default=0.001, help="靠近边界积分泄露")

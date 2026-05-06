@@ -78,7 +78,7 @@ class MVELaneChangeAndOverTake(MVE):
     def __init__(self,
                  num_agents: int,
                  area_size: Optional[float] = None,
-                 max_step: int = 384,
+                 max_step: int = 256,
                  max_travel: Optional[float] = None,
                  dt: float = 0.05,
                  reward_min: float = -17.,
@@ -454,7 +454,8 @@ class MVELaneChangeAndOverTake(MVE):
         n_goals = self.num_agents if n_goals is None else n_goals
 
         ax: Axes
-        xlim = self.params["rollout_state_range"][:2]
+        # xlim = self.params["rollout_state_range"][:2]
+        xlim = np.array([-100, 200])
         ylim = self.params["default_state_range"][2:4]
         fig, ax = plt.subplots(1, 1, figsize=(30,
                                 (ylim[1]+3-(ylim[0]-3))*20/(xlim[1]+3-(xlim[0]-3))+4)
@@ -791,8 +792,8 @@ class MVELaneChangeAndOverTake(MVE):
 
     @override
     def action_lim(self) -> Tuple[Action, Action]:
-        lower_lim = jnp.array([-1., -3.])[None, :].repeat(self.num_agents, axis=0) # ax: m/s^2, δ: °
-        upper_lim = jnp.array([2., 3.])[None, :].repeat(self.num_agents, axis=0)
+        lower_lim = jnp.array([-1., -7.])[None, :].repeat(self.num_agents, axis=0) # ax: m/s^2, δ: °
+        upper_lim = jnp.array([2., 7.])[None, :].repeat(self.num_agents, axis=0)
         return lower_lim, upper_lim
 
     @override
@@ -878,6 +879,7 @@ class MVELaneChangeAndOverTake(MVE):
         a_deltaf=record.deltaf*7
         BD_lane=record.BD_lane
         a_Ye=record.a_Ye
+        BD_weighted_sum=record.BD_weighted_sum
         # 遍历所有时间步，提取速度和位置信息
         for t in range(T):
             g = tree_index(rollout.graph, t)
@@ -942,8 +944,9 @@ class MVELaneChangeAndOverTake(MVE):
 
         for a in range(A):
             #axes[4].plot(time, ao_BD[:, a], label=f"ao_BD")
-            axes[5].plot(time, ao_BD[:, a], label=f"ao_BD")
-            axes[5].plot(time, BD_lane[:,a], label=f"ao_BD")
+            axes[5].plot(time, ao_BD[:, a], label=f"ao_BD",color='r')
+            axes[5].plot(time, BD_lane[:,a], label=f"ao_BD",color='b')
+            axes[5].plot(time, BD_weighted_sum[:,a], label=f"ao_BD",color='k')
            # axes[5].plot(time, a_Ye[:,a], label=f"a_ye")
         # axes[3].plot(time, YD_deta[:, a], label=f"agent{a} - YD_deta", linestyle='-.')
         axes[5].set_ylabel("Psi (degrees) / Psid_metric")
