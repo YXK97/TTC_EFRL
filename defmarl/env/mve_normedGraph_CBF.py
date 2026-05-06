@@ -150,7 +150,7 @@ class MVENormedGraph_CBF(MVE):
         convert_vec_s = jnp.array([1, 1, 3.6, 3.6, 180/jnp.pi, 180/jnp.pi, 180/jnp.pi]) # eg. km/h / convert_vec -> m/s
         convert_vec_a = jnp.array([1, 180/jnp.pi]) # m/s²不变，° / convert_vec_a -> rad
 
-        def delta_low_pass_filter(delta_desire, delta_real, gamma=0.2) -> float:
+        def delta_low_pass_filter(delta_desire, delta_real, gamma=0.8) -> float:
             # delta_desire: 目标前轮偏角 (rad)
             # delta_real: 上一帧的实际前轮偏角 (rad)
             # gamma: 滤波系数，默认 0.2
