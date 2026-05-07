@@ -16,7 +16,7 @@ from matplotlib.collections import LineCollection
 from matplotlib.patches import FancyArrow
 
 from .mve import MVE, MVEEnvState, MVEEnvGraphsTuple
-from .designed_scene_gen_two_lane import gen_handmade_scene
+from .designed_scene_gen_two_lane import gen_handmade_scene, gen_scene_randomly
 from .utils import process_lane_centers, process_lane_marks, relative_state
 from defmarl.trainer.data import Rollout, Record
 from defmarl.utils.graph import EdgeBlock, GetGraph, GraphsTuple
@@ -53,7 +53,7 @@ class MVELaneChangeAndOverTake_LowSpeed(MVE):
         # "rollout_state_b_range": jnp.array([-INF, INF, -INF, INF, -180., 180., 30., 100., 0., INF, 0., INF, 0., INF]),
         "agent_init_state_range": jnp.array([-100., -50., -3., 3., -180., 180., -INF, INF, 0., INF, 0., INF, 0., INF]),
         "terminal_state_range": jnp.array([50., 100., -3., 3., -180., 180., -INF, INF, 0., INF, 0., INF, 0., INF]),
-        "default_state_range": jnp.array([-100., 100., -3., 3., -180., 180., -INF, INF, 0., INF, 0., INF, 0., INF]),
+        "default_state_range": jnp.array([0., 100., -3., 3., -180., 180., -INF, INF, 0., INF, 0., INF, 0., INF]),
 
         "lane_width": 3, # 车道宽度，m
         "v_bias": 5, # 可允许的速度偏移量
@@ -132,8 +132,8 @@ class MVELaneChangeAndOverTake_LowSpeed(MVE):
         xrange = self.params["default_state_range"][:2]
         yrange = self.params["default_state_range"][2:4]
         lanewidth = self.params["lane_width"]
-        #agents, obsts, all_goals, all_dsYddts = gen_scene_randomly(key, self.num_agents, self.num_goals, xrange, yrange, lanewidth, c_ycs)
-        agents, obsts, all_goals, all_dsYddts = gen_handmade_scene(key, self.num_agents, self.num_goals, xrange, yrange, lanewidth, c_ycs)
+        agents, obsts, all_goals, all_dsYddts = gen_scene_randomly(key, self.num_agents, self.num_goals, xrange, yrange, lanewidth, c_ycs)
+        # agents, obsts, all_goals, all_dsYddts = gen_handmade_scene(key, self.num_agents, self.num_goals, xrange, yrange, lanewidth, c_ycs)
         self.all_goals = all_goals
         self.all_dsYddts = all_dsYddts
         goals_init_indices = find_closest_goal_indices(agents, all_goals)
@@ -145,6 +145,7 @@ class MVELaneChangeAndOverTake_LowSpeed(MVE):
 
         return self.get_graph(env_state), dsYddts
 
+    @override
     def agent_step_euler(self, aS_agent_states, aS_goal_states, ad_action): #对agent，使用3-DOF自行车运动学模型,车辆中心在后轴中心
         x = aS_agent_states[:, 0]
         y = aS_agent_states[:, 1]

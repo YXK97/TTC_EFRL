@@ -75,16 +75,12 @@ def generate_horizontal_path_points(xrange: Array,
     onen_xs = jnp.linspace(start=xrange[0][None], stop=xrange[0][None] + (num_points + 1) * points_interval, num=num_points,
                            dtype=jnp.float32).T
     onen_ys = jnp.repeat(start_y[None, None], num_points, axis=1)
-    onen_thetas_rad = jnp.zeros_like(onen_ys)
     onen_thetas_deg = jnp.zeros_like(onen_ys)
-    # state: x y vx vy θ dθdt bw bh
+    # state: x y θ v δ bw bh lr
     onen_vs_kmph = jnp.repeat(terminal_vx[None, None], num_points, axis=1)
-    onen_vxs_kmph = onen_vs_kmph
-    onen_vys_kmph = jnp.zeros_like(onen_ys)
-    onen_dthetas_degps = jnp.zeros_like(onen_ys)
     onen_zeros = jnp.zeros_like(onen_xs)
 
-    onenS_goals = jnp.stack([onen_xs, onen_ys, onen_vxs_kmph, onen_vys_kmph, onen_thetas_deg, onen_dthetas_degps, onen_zeros, onen_zeros],
+    onenS_goals = jnp.stack([onen_xs, onen_ys, onen_thetas_deg, onen_vs_kmph, onen_zeros, onen_zeros, onen_zeros, onen_zeros],
                             axis=2)
     anS_goals = jnp.repeat(onenS_goals, num_agents, axis=0)
 
@@ -191,7 +187,173 @@ class LaneChangeANDOvertakeScene(SceneBase, ABC):
     def yrange(self):
         return self._yrange
 
+class LaneChangeMiddleStaticEdgeFastMoving2lane(LaneChangeANDOvertakeScene):
+    """此场景只可适用于双车道场景，1个静态障碍物，静态障碍物放在车道中间，但是位置随机；
+    agent由第1/2车道向第2/1车道变道，使得agent在差不多到第3/1车道时与动态障碍物发生碰撞，图例如下：
+    ==================================================
+    1                           ---------------> reference path
+    ------------------------/-------------------------
+    2     ego  ■ --------/    ♦  static obstacle
+    ==================================================
+    """
 
+    def __init__(self, key: PRNGKey, num_agents: int, num_ref_points:int, xrange:Array, yrange:Array, lane_width:float,
+                 lane_centers:Array):
+        super(LaneChangeMiddleStaticEdgeFastMoving2lane, self).__init__(key, num_agents, num_ref_points, xrange, yrange,
+                                                                   lane_width, lane_centers)
+
+    @property
+    def name(self) -> str:
+        return 'lanechange_scene_with_middle_static_obstacle_and_edge_2_lane'
+
+    @property
+    def num_lanes(self) -> int:
+        assert self.lane_centers.shape[0] == 2, '本场景支持双车道配置！'
+        return 2
+
+    @property
+    def num_moving_obsts(self) -> int:
+        return 0
+
+    @property
+    def num_static_obsts(self) -> int:
+        return 1
+
+    def make(self) -> Tuple[AgentState, ObstState, PathRefs, jnp.ndarray]:
+        start_x_key, terminal_x_key, start_y_key, start_terminal_v_key, agent_x_key, agent_y_key, agent_v_key, \
+            sobst_y_key, sobst_theta_key, mobst_x_key, mobst_y_key, mobst_vx_key = jr.split(self.key, 12)
+
+        # 生成轨迹
+        start_x = jr.uniform(start_x_key, shape=(), dtype=jnp.float32, minval=self.xrange[0],
+                             maxval=(self.xrange[1]-self.xrange[0])/3+self.xrange[0])
+        terminal_x = jr.uniform(terminal_x_key, shape=(), dtype=jnp.float32,
+                                minval=2*(self.xrange[1]-self.xrange[0])/3+self.xrange[0],
+                                maxval=self.xrange[1])
+
+        start_lane = jr.choice(start_y_key, jnp.array([0, 1], dtype=jnp.int32), shape=())
+        terminal_lane = 1 - start_lane
+        start_y = self.lane_centers[start_lane]
+        terminal_y = self.lane_centers[terminal_lane]
+        start_theta = terminal_theta = jnp.array([0.])[0]
+        start_v = terminal_v = jr.uniform(start_terminal_v_key, shape=(), dtype=jnp.float32,
+                                            minval=10, maxval=30) # 10 ~ 30 km/h
+        Sm4_other0 = jnp.zeros((self.state_dim-4,), dtype=jnp.float32)
+        S_start_state = jnp.concatenate([start_x[None], start_y[None],start_theta[None], start_v[None], Sm4_other0])
+        S_terminal_state = jnp.concatenate([terminal_x[None], terminal_y[None], terminal_theta[None], terminal_v[None], Sm4_other0])
+        anS_goals, an4_dsYddts = generate_lanechange_path_points(self.xrange, self.num_agents, self.num_ref_points,
+                                                                 S_start_state, S_terminal_state)
+
+        # 生成初始agent，x坐标都一样，y坐标可略有上下波动，vx可不一样，其它的都是0
+        agent_x = jr.uniform(agent_x_key, shape=(), dtype=jnp.float32, minval=self.xrange[0], maxval=start_x)
+        a_agent_x = jnp.repeat(agent_x[None], self.num_agents, axis=0) # 变道前同一x
+        a_agent_y = jnp.repeat(start_y[None], self.num_agents, axis=0) + jr.uniform(agent_y_key, shape=(self.num_agents,),
+                                                                                    dtype=jnp.float32, minval=-0.1, maxval=0.1)
+        a_agent_theta = jnp.repeat(start_theta[None], self.num_agents, axis=0)
+        a_agent_v = jr.uniform(agent_v_key, shape=(self.num_agents,), dtype=jnp.float32,
+                                minval=10, maxval=30) # 10 ~ 30 km/h
+        aSm4_other0 = jnp.repeat(Sm4_other0[None, :], self.num_agents, axis=0)
+        aS_agent_state = jnp.concatenate([a_agent_x[:, None], a_agent_y[:, None],a_agent_theta[:,None], a_agent_v[:, None], aSm4_other0], axis=1)
+
+        # 生成静态障碍物，x坐标位于变道后2/3区间随机，y坐标随机选择车道1/2，航向角可选-180°到180°之间
+        sobst_x = 2*(self.xrange[1]-self.xrange[0])/3 + self.xrange[0]
+        sobst_y = jr.choice(sobst_y_key, self.lane_centers[jnp.array([0,1])], shape=())
+        # sobst_y = jr.uniform(sobst_y_key, shape=(), dtype=jnp.float32, minval=-0., maxval=0.) + sobst_y_key
+        sobst_theta = jr.uniform(sobst_theta_key, shape=(), dtype=jnp.float32, minval=0, maxval=0)
+        S_sobst_state = jnp.stack([sobst_x, sobst_y, sobst_theta, 0., 0., 0., 0., 0.])
+        oS_obst_state = S_sobst_state[None]
+        '''
+        # 生成动态障碍物，y坐标位于变道目标车道坐标，可稍有浮动，vx可随机选择一个较大值，x坐标需要计算agent恰好变道到目标车道时的时间
+        t = (terminal_x - agent_x) / terminal_vx
+        mobst_y = jr.uniform(mobst_y_key, shape=(), dtype=jnp.float32, minval=-0.5, maxval=0.5) + terminal_y
+        mobst_vx = jr.uniform(mobst_vx_key, shape=(), dtype=jnp.float32, minval=90, maxval=120) # 90 ~ 120 km/h
+        mobst_x = terminal_x - t * mobst_vx - 5 + \
+                  jr.uniform(mobst_x_key, shape=(), dtype=jnp.float32, minval=-2, maxval=2)
+        S_mobst_state = jnp.concatenate([mobst_x[None], mobst_y[None], mobst_vx[None], Sm3_other0], axis=0)
+        oS_obst_state = jnp.stack([S_sobst_state, S_mobst_state], axis=0)
+        '''
+        return aS_agent_state, oS_obst_state, anS_goals, an4_dsYddts
+
+class OvertakeEdgeStaticMiddle2lane(LaneChangeANDOvertakeScene):
+    """此场景只可适用于双车道场景，1个静态障碍物，静态障碍物放在第1/2车道，
+    agent沿第1/2车道直行，静态障碍物在后2/3处随机车道1/2，图例如下：
+    ==================================================
+    1
+    --------------------------------------------------
+    2     ego  ■ --------♦  static obstacle--> reference path
+    ==================================================
+    """
+
+    def __init__(self, key: PRNGKey, num_agents: int, num_ref_points:int, xrange:Array, yrange:Array, lane_width:float,
+                 lane_centers:Array):
+        super(OvertakeEdgeStaticMiddle2lane, self).__init__(key, num_agents, num_ref_points, xrange, yrange,
+                                                                 lane_width, lane_centers)
+
+    @property
+    def name(self) -> str:
+        return 'overtake_scene_with_edge_static_obstacle_and_middle_fast_moving_obstacle'
+
+    @property
+    def num_lanes(self) -> int:
+        assert self.lane_centers.shape[0] == 2, '本场景仅支持双车道配置！'
+        return 2
+
+    @property
+    def num_moving_obsts(self) -> int:
+        return 0
+
+    @property
+    def num_static_obsts(self) -> int:
+        return 1
+
+    def make(self) -> Tuple[AgentState, ObstState, PathRefs, jnp.ndarray]:
+        start_x_key, terminal_x_key, start_y_key, start_terminal_v_key, agent_x_key, agent_y_key, agent_v_key, \
+            sobst_y_key, sobst_theta_key, mobst_x_key, mobst_y_key, mobst_vx_key = jr.split(self.key, 12)
+
+        # 生成轨迹
+        start_x = jr.uniform(start_x_key, shape=(), dtype=jnp.float32, minval=self.xrange[0],
+                             maxval=(self.xrange[1] - self.xrange[0]) / 3 + self.xrange[0])
+        terminal_x = jr.uniform(terminal_x_key, shape=(), dtype=jnp.float32,
+                                minval=2 * (self.xrange[1] - self.xrange[0]) / 3 + self.xrange[0],
+                                maxval=self.xrange[1])
+        start_theta = terminal_theta = jnp.array([0.])[0]
+        start_y = terminal_y = jr.choice(start_y_key, self.lane_centers[jnp.array([0, 1])], shape=())
+        terminal_v = jr.uniform(start_terminal_v_key, shape=(), dtype=jnp.float32,
+                                 minval=10, maxval=30)  # 10 ~ 30 km/h
+        Sm4_other0 = jnp.zeros((self.state_dim - 4,), dtype=jnp.float32)
+        anS_goals, an4_dsYddts = generate_horizontal_path_points(self.xrange, self.num_agents, self.num_ref_points,
+                                                                 start_y, terminal_v)
+
+        # 生成初始agent，x坐标都一样，y坐标可略有上下波动，vx可不一样，其它的都是0
+        agent_x = jr.uniform(agent_x_key, shape=(), dtype=jnp.float32, minval=self.xrange[0], maxval=start_x)
+        a_agent_x = jnp.repeat(agent_x[None], self.num_agents, axis=0)  # 变道前同一x
+        a_agent_y = jnp.repeat(start_y[None], self.num_agents, axis=0) \
+                    + jr.uniform(agent_y_key, shape=(self.num_agents,), dtype=jnp.float32, minval=-0.1, maxval=0.1)
+        a_agent_theta = jnp.repeat(start_theta[None], self.num_agents, axis=0)
+        a_agent_v = jr.uniform(agent_v_key, shape=(self.num_agents,), dtype=jnp.float32,
+                                minval=10, maxval=30)  # 10 ~ 30 km/h
+        aSm4_other0 = jnp.repeat(Sm4_other0[None, :], self.num_agents, axis=0)
+        aS_agent_state = jnp.concatenate([a_agent_x[:, None], a_agent_y[:, None], a_agent_theta[:, None], a_agent_v[:, None], aSm4_other0],
+                                         axis=1)
+
+        # 生成静态障碍物，位于start和terminal中间，y坐标可以略微上下浮动，航向角可选-180°到180°之间
+        sobst_x = 2*(self.xrange[1]-self.xrange[0])/3 + self.xrange[0]
+        sobst_y = jr.choice(start_y_key, self.lane_centers[jnp.array([0,1])], shape=())
+        # sobst_y = jr.uniform(sobst_y_key, shape=(), dtype=jnp.float32, minval=-0., maxval=0.) + sobst_y_key
+        sobst_theta = jr.uniform(sobst_theta_key, shape=(), dtype=jnp.float32, minval=0, maxval=0)
+        S_sobst_state = jnp.stack([sobst_x, sobst_y, sobst_theta, 0., 0., 0., 0., 0.])
+        oS_obst_state = S_sobst_state[None]
+        '''
+        # 生成动态障碍物，y坐标位于中间车道，可稍有浮动，vx可随机选择一个较大值，x坐标需要计算agent恰好到静态障碍物时时动态障碍物位于
+        # agent附近
+        t = (sobst_x - agent_x) / terminal_vx
+        mobst_y = jr.uniform(mobst_y_key, shape=(), dtype=jnp.float32, minval=-0.5, maxval=0.5) + self.lane_centers[1]
+        mobst_vx = jr.uniform(mobst_vx_key, shape=(), dtype=jnp.float32, minval=90, maxval=120)  # 90 ~ 120 km/h
+        mobst_x = sobst_x - t * mobst_vx  + \
+                  jr.uniform(mobst_x_key, shape=(), dtype=jnp.float32, minval=5, maxval=15)
+        S_mobst_state = jnp.concatenate([mobst_x[None], mobst_y[None], mobst_vx[None], Sm3_other0], axis=0)
+        oS_obst_state = jnp.stack([S_sobst_state, S_mobst_state], axis=0)
+        '''
+        return aS_agent_state, oS_obst_state, anS_goals, an4_dsYddts
 
 class HandMadeSceneLaneChange2LaneFastMoving(LaneChangeANDOvertakeScene):
     """
@@ -262,6 +424,18 @@ class HandMadeSceneLaneChange2LaneFastMoving(LaneChangeANDOvertakeScene):
         oS_obst_state = S_sobst_state[None]
 
         return aS_agent_state, oS_obst_state, anS_goals, an4_dsYddts
+
+def gen_scene_randomly(key: PRNGKey, num_agents: int, num_ref_points: int, xrange: Array, yrange: Array,
+                       lane_width: float, lane_centers: Array) -> Tuple[AgentState, ObstState, PathRefs, jnp.ndarray]:
+    choose_key, scene_key = jr.split(key, 2)
+    scene_list = [LaneChangeMiddleStaticEdgeFastMoving2lane(scene_key, num_agents, num_ref_points, xrange, yrange,
+                                                       lane_width, lane_centers).make,
+                  OvertakeEdgeStaticMiddle2lane(scene_key, num_agents, num_ref_points, xrange, yrange,
+                                                     lane_width, lane_centers).make]
+    choose_id = jr.choice(choose_key, len(scene_list))
+    aS_agent_state, oS_obst_state, anS_goals, an4_dsYddts = jax.lax.switch(choose_id, scene_list)
+
+    return aS_agent_state, oS_obst_state, anS_goals, an4_dsYddts
 
 def gen_handmade_scene(key: PRNGKey, num_agents: int, num_ref_points: int, xrange: Array, yrange: Array,
                        lane_width: float, lane_centers: Array) -> Tuple[AgentState, ObstState, PathRefs, jnp.ndarray]:
