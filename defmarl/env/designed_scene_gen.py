@@ -694,7 +694,6 @@ class OvertakeEdgeStaticMiddleSlowMoving(LaneChangeANDOvertakeScene):
 
         return aS_agent_state, oS_obst_state, anS_goals, an4_dsYddts
 
-
 # ==================== 以下都是手动设置好的取定性场景 ====================
 class HandMadeSceneLaneChangeMiddleStaticEdgeFastMoving(LaneChangeANDOvertakeScene):
     """此场景是只可适用于3车道的确定性场景，布置1个动态障碍物，1个静态障碍物，静态障碍物放在中间车道，动态障碍物放在第1车道，同时动态障碍物车速较快，
@@ -967,6 +966,7 @@ class HandMadeSceneLaneChangeEdgeStaticMiddleSlowMoving(LaneChangeANDOvertakeSce
 
         # 生成初始agent
         agent_x = jnp.array([-80.])[0]
+        #agent_x = jnp.array([-40.])[0] # debug
         agent_vx = jnp.array([80])[0]
         a_agent_x = jnp.repeat(agent_x[None], self.num_agents, axis=0)  # 变道前同一x
         a_agent_y = jnp.repeat(start_y[None], self.num_agents, axis=0)
@@ -1155,17 +1155,215 @@ def gen_scene_randomly(key: PRNGKey, num_agents: int, num_ref_points: int, xrang
 
     return aS_agent_state, oS_obst_state, anS_goals, an4_dsYddts
 
+class HandMadeSceneLaneChangeMiddleStaticEdgeFastMoving_new(LaneChangeANDOvertakeScene):
+    """此场景是只可适用于3车道的确定性场景，布置1个动态障碍物，1个静态障碍物，静态障碍物放在中间车道，动态障碍物放在第3车道，同时动态障碍物车速较快，
+    agent由第1车道向第3车道变道，使得agent在差不多到3车道时与动态障碍物发生碰撞，图例如下：
+    ==================================================
+    1     ego  ■ --------\
+    ------------------------\-------------------------
+    2                         ♦  static obstacle
+    -----------------------------\--------------------
+    3   □ ---------> moving obstacle/-------------> reference path
+    ==================================================
+    """
+
+    def __init__(self, key: PRNGKey, num_agents: int, num_ref_points:int, xrange:Array, yrange:Array, lane_width:float,
+                 lane_centers:Array):
+        super(HandMadeSceneLaneChangeMiddleStaticEdgeFastMoving_new, self).__init__(key, num_agents, num_ref_points, xrange, yrange,
+                                                                                    lane_width, lane_centers)
+
+    @property
+    def name(self) -> str:
+        return 'handmade_lanechange_scene_with_middle_static_obstacle_and_edge_fast_moving_obstacle'
+
+    @property
+    def num_lanes(self) -> int:
+        assert self.lane_centers.shape[0] == 3, '本场景仅支持三车道配置！'
+        return 3
+
+    @property
+    def num_moving_obsts(self) -> int:
+        return 1
+
+    @property
+    def num_static_obsts(self) -> int:
+        return 1
+
+    def make(self) -> Tuple[AgentState, ObstState, PathRefs, jnp.ndarray]:
+        # 生成轨迹 —— 从第1车道（lane_centers[0]）变道到第3车道（lane_centers[-1]）
+        start_x = jnp.array([-100.])[0]
+        terminal_x = jnp.array([100.])[0]
+        start_y = self.lane_centers[0]       # 起点：第1车道（最下方）
+        terminal_y = self.lane_centers[-1]    # 终点：第3车道（最上方）
+        start_vx = terminal_vx = jnp.array([80])[0]  # km/h
+        Sm3_other0 = jnp.zeros((self.state_dim - 3,), dtype=jnp.float32)
+        S_start_state = jnp.concatenate([start_x[None], start_y[None], start_vx[None], Sm3_other0])
+        S_terminal_state = jnp.concatenate([terminal_x[None], terminal_y[None], terminal_vx[None], Sm3_other0])
+        anS_goals, an4_dsYddts = generate_lanechange_path_points(self.xrange, self.num_agents, self.num_ref_points,
+                                                                 S_start_state, S_terminal_state)
+
+        # 生成初始agent —— 起点在第1车道
+        agent_x = jnp.array([-120.])[0]
+        agent_vx = jnp.array([90])[0]
+        a_agent_x = jnp.repeat(agent_x[None], self.num_agents, axis=0)
+        a_agent_y = jnp.repeat(start_y[None], self.num_agents, axis=0)  # 第1车道
+        a_agent_vx = jnp.repeat(agent_vx[None], self.num_agents, axis=0)
+        aSm3_other0 = jnp.repeat(Sm3_other0[None, :], self.num_agents, axis=0)
+        aS_agent_state = jnp.concatenate([a_agent_x[:, None], a_agent_y[:, None], a_agent_vx[:, None], aSm3_other0],
+                                         axis=1)
+
+        # 生成静态障碍物 —— 仍在中间车道，位置不变
+        sobst_x = (start_x + terminal_x) / 2 + 20
+        sobst_y = self.lane_centers[1]-3.5
+        sobst_theta = 0.
+        S_sobst_state = jnp.stack([sobst_x, sobst_y, 0., 0., sobst_theta, 0., 0., 0.])
+
+        # 生成动态障碍物 —— 移动到第3车道（最上方），逻辑保持：agent变道到终点时相遇
+        t = (terminal_x - agent_x) / terminal_vx
+        mobst_y = terminal_y  # 动态障碍物在第3车道
+        mobst_vx = jnp.array([150])[0]
+        mobst_x = terminal_x - t * mobst_vx + 10
+        S_mobst_state = jnp.concatenate([mobst_x[None], mobst_y[None], mobst_vx[None], Sm3_other0], axis=0)
+        oS_obst_state = jnp.stack([S_sobst_state, S_mobst_state], axis=0)
+
+        return aS_agent_state, oS_obst_state, anS_goals, an4_dsYddts
+
+class HandMadeSceneLaneChange2LaneFastMoving(LaneChangeANDOvertakeScene):
+    """
+    【双车道版本】车道宽度 = 2.5m
+    固定双车道中心线：
+        lane 1 center =  1.25
+        lane 2 center = -1.25
+
+    静态障碍物：放在车道1
+    动态障碍物：放在车道2，高速行驶
+    ==================================================
+    lane 1     ego  ■ --------\        ♦ static obstacle
+    -----------------------------------\----------------
+    lane 2                         □ ----\-----> moving obstacle
+                                           \----> reference path
+    ==================================================
+    """
+
+    def __init__(self,
+                 key: PRNGKey,
+                 num_agents: int,
+                 num_ref_points: int,
+                 xrange: Array,
+                 yrange: Array = None,
+                 lane_width: float = 2.5,
+                 lane_centers: Array = None):
+        # 强制固定成双车道配置，忽略外部传入的三车道参数
+        lane_width = 2.5
+        lane_centers = jnp.array([1.25, -1.25], dtype=jnp.float32)
+        yrange = jnp.array([-2.5, 2.5], dtype=jnp.float32)
+
+        super().__init__(
+            key=key,
+            num_agents=num_agents,
+            num_ref_points=num_ref_points,
+            xrange=xrange,
+            yrange=yrange,
+            lane_width=lane_width,
+            lane_centers=lane_centers
+        )
+
+    @property
+    def name(self) -> str:
+        return 'handmade_lanechange_2lane_fast_moving_obstacle'
+
+    @property
+    def num_lanes(self) -> int:
+        return 2
+
+    @property
+    def num_moving_obsts(self) -> int:
+        return 1
+
+    @property
+    def num_static_obsts(self) -> int:
+        return 1
+
+    def make(self) -> Tuple[AgentState, ObstState, PathRefs, jnp.ndarray]:
+        # 参考轨迹：从车道1变道到车道2
+        start_x = jnp.array(-100., dtype=jnp.float32)
+        terminal_x = jnp.array(100., dtype=jnp.float32)
+
+        start_y = self.lane_centers[0]      # 1.25
+        terminal_y = self.lane_centers[1]   # -1.25
+
+        start_vx = jnp.array(80., dtype=jnp.float32)
+        terminal_vx = jnp.array(80., dtype=jnp.float32)
+
+        Sm3_other0 = jnp.zeros((self.state_dim - 3,), dtype=jnp.float32)
+
+        S_start_state = jnp.concatenate([
+            start_x[None], start_y[None], start_vx[None], Sm3_other0
+        ])
+        S_terminal_state = jnp.concatenate([
+            terminal_x[None], terminal_y[None], terminal_vx[None], Sm3_other0
+        ])
+
+        anS_goals, an4_dsYddts = generate_lanechange_path_points(
+            self.xrange,
+            self.num_agents,
+            self.num_ref_points,
+            S_start_state,
+            S_terminal_state
+        )
+
+        # ego 初始状态：都在车道1
+        agent_x = jnp.array(-120., dtype=jnp.float32)
+        agent_vx = jnp.array(90., dtype=jnp.float32)
+
+        a_agent_x = jnp.repeat(agent_x[None], self.num_agents, axis=0)
+        a_agent_y = jnp.repeat(start_y[None], self.num_agents, axis=0)
+        a_agent_vx = jnp.repeat(agent_vx[None], self.num_agents, axis=0)
+        aSm3_other0 = jnp.repeat(Sm3_other0[None, :], self.num_agents, axis=0)
+
+        aS_agent_state = jnp.concatenate([
+            a_agent_x[:, None],
+            a_agent_y[:, None],
+            a_agent_vx[:, None],
+            aSm3_other0
+        ], axis=1)
+
+        # 静态障碍物：车道1
+        sobst_x = (start_x + terminal_x) / 2.0 + 15.0
+        sobst_y = self.lane_centers[0]
+        sobst_theta = jnp.array(0., dtype=jnp.float32)
+
+        S_sobst_state = jnp.stack([
+            sobst_x, sobst_y, 0., 0., sobst_theta, 0., 0., 0.
+        ])
+
+        # 动态障碍物：车道2，高速
+        # 用 ego 到 terminal_x 的预计时间，反推障碍物初始位置
+        t = (terminal_x - agent_x) / agent_vx
+        mobst_y = self.lane_centers[1]
+        mobst_vx = jnp.array(150., dtype=jnp.float32)
+        mobst_x = terminal_x - t * mobst_vx + 10.0
+
+        S_mobst_state = jnp.concatenate([
+            mobst_x[None], mobst_y[None], mobst_vx[None], Sm3_other0
+        ], axis=0)
+
+        oS_obst_state = jnp.stack([S_sobst_state, S_mobst_state], axis=0)
+
+        return aS_agent_state, oS_obst_state, anS_goals, an4_dsYddts
 
 def gen_handmade_scene(key: PRNGKey, num_agents: int, num_ref_points: int, xrange: Array, yrange: Array,
                                 lane_width: float, lane_centers: Array) -> Tuple[AgentState, ObstState, PathRefs, jnp.ndarray]:
     choose_key, scene_key = jr.split(key, 2)
     scene_list = [
-        # HandMadeSceneLaneChangeMiddleStaticEdgeFastMoving(scene_key, num_agents, num_ref_points, xrange, yrange, lane_width, lane_centers).make,
-        # HandMadeSceneLaneChangeMiddleStaticEdgeSlowMoving(scene_key, num_agents, num_ref_points, xrange, yrange, lane_width, lane_centers).make,
+        HandMadeSceneLaneChange2LaneFastMoving(scene_key, num_agents, num_ref_points, xrange, yrange, lane_width, lane_centers).make,
+        # HandMadeSceneLaneChangeMiddleStaticEdgeFastMoving_new(scene_key, num_agents, num_ref_points, xrange, yrange, lane_width, lane_centers).make, # Scenario I
+        # HandMadeSceneLaneChangeMiddleStaticEdgeFastMoving(scene_key, num_agents, num_ref_points, xrange, yrange, lane_width, lane_centers).make, # Scenario I
+        # HandMadeSceneLaneChangeMiddleStaticEdgeSlowMoving(scene_key, num_agents, num_ref_points, xrange, yrange, lane_width, lane_centers).make, # Scenario II
         # HandMadeSceneLaneChangeEdgeStaticMiddleFastMoving(scene_key, num_agents, num_ref_points, xrange, yrange, lane_width, lane_centers).make,
         # HandMadeSceneLaneChangeEdgeStaticMiddleSlowMoving(scene_key, num_agents, num_ref_points, xrange, yrange, lane_width, lane_centers).make,
-        HandMadeSceneOvertakeEdgeStaticMiddleFastMoving(scene_key, num_agents, num_ref_points, xrange, yrange, lane_width, lane_centers).make,
-        # HandMadeSceneOvertakeEdgeStaticMiddleSlowMoving(scene_key, num_agents, num_ref_points, xrange, yrange, lane_width, lane_centers).make,
+        #  HandMadeSceneOvertakeEdgeStaticMiddleFastMoving(scene_key, num_agents, num_ref_points, xrange, yrange, lane_width, lane_centers).make, # Scenario III
+        # HandMadeSceneOvertakeEdgeStaticMiddleSlowMoving(scene_key, num_agents, num_ref_points, xrange, yrange, lane_width, lane_centers).make, # Scenario IV
     ]
     choose_id = jr.choice(choose_key, len(scene_list))
     aS_agent_state, oS_obst_state, anS_goals, an4_dsYddts = jax.lax.switch(choose_id, scene_list)

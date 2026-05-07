@@ -254,6 +254,33 @@ def calc_quintic_eff(starts: AgentState, terminals: AgentState) -> Tuple[PathEff
      return coeffs_f, coeffs_df, coeffs_ddf, coeffs_dddf
 
 @jax.jit
+def calc_quintic_eff_lowspeed(starts: AgentState, terminals: AgentState) -> Tuple[PathEff, PathEff, PathEff, PathEff]:
+    """适用于运动学低速场景，根据起点和终点求解五次多项式，输出原始参数、一阶导参数、二阶导参数和三阶导参数"""
+    zeros = jnp.zeros((starts.shape[0],), dtype=jnp.float32)
+    # state: x y θ v bw bh lr
+    def A_b_create_and_solve(start, terminal) -> PathEff:
+        x0 = start[0]
+        x1 = terminal[0]
+        A = jnp.array([[1, x0, x0**2,   x0**3,    x0**4,    x0**5],
+                       [0,  1,  2*x0, 3*x0**2,  4*x0**3,  5*x0**4],
+                       [0,  0,     2,    6*x0, 12*x0**2, 20*x0**3],
+                       [1, x1, x1**2,   x1**3,    x1**4,    x1**5],
+                       [0,  1,  2*x1, 3*x1**2,  4*x1**3,  5*x1**4],
+                       [0,  0,     2,    6*x1, 12*x1**2, 20*x1**3],])
+        y0 = start[1]
+        y1 = terminal[1]
+        t0 = start[2]*jnp.pi/180
+        t1 = terminal[2]*jnp.pi/180
+        b = jnp.array([y0, jnp.tan(t0), 0, y1, jnp.tan(t1), 0])
+        coeff = jnp.linalg.solve(A, b)
+        return coeff
+    coeffs_f = jax.vmap(A_b_create_and_solve, in_axes=(0, 0))(starts, terminals)
+    coeffs_df = jnp.stack([coeffs_f[:,1],2*coeffs_f[:,2],3*coeffs_f[:,3],4*coeffs_f[:,4],5*coeffs_f[:,5],zeros], axis=1)
+    coeffs_ddf = jnp.stack([2*coeffs_f[:,2],6*coeffs_f[:,3],12*coeffs_f[:,4],20*coeffs_f[:,5],zeros,zeros], axis=1)
+    coeffs_dddf = jnp.stack([6*coeffs_f[:,3],24*coeffs_f[:,4],60*coeffs_f[:,5],zeros,zeros,zeros], axis=1)
+    return coeffs_f, coeffs_df, coeffs_ddf, coeffs_dddf
+
+@jax.jit
 def calc_linear_eff(starts: AgentState, terminals: AgentState) -> Tuple[PathEff, PathEff, PathEff]:
      """根据起点和终点求解一次函数，输出原始参数、一阶导参数和二阶导参数"""
      zeros = jnp.zeros((starts.shape[0],), dtype=jnp.float32)

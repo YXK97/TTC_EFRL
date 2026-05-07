@@ -148,3 +148,139 @@ def scaling_calc_bound(s: State, A: Array, b: Array) -> Array:
     alpha = O_in_bound * scaling
     return alpha
 
+def compute_h_ij(p1, R1, Q1, p2, R2, Q2, z):
+    """
+    计算论文中的公式 (19)：支撑超平面到另一个椭球的解析距离 h_{ij}
+
+    参数:
+    p1, p2: (2,) 椭球 1 和 2 的中心位置
+    R1, R2: (2, 2) 旋转矩阵 SO(2)
+    Q1, Q2: (2, 2) 形状矩阵（对角阵，对角线元素为半轴长）
+    z: (2,) 单位向量，指定了椭球 1 表面的支撑超平面切点映射
+    """
+    # 计算方向调整后的形状矩阵 (orientation-adjusted shape matrix)
+    # Q_bar1 = R1 @ Q1 @ R1^T, 但实际上逆矩阵用得更多
+    # 为了数值稳定性和计算效率，直接计算 Q_bar1 的逆: Q_bar1_inv = R1 @ Q1^{-1} @ R1^T
+    inv_Q1 = jnp.diag(1.0 / jnp.diag(Q1))
+    Q_bar1_inv = R1 @ inv_Q1 @ R1.T
+
+    Q_bar2 = R2 @ Q2 @ R2.T
+
+    # 核心中间变量 v = Q_bar1_inv @ z
+    v = Q_bar1_inv @ z
+    v_norm = jnp.linalg.norm(v)
+
+    # 公式 (19) 的分子部分
+    # term1 = - || \bar{Q}_2 \bar{Q}_1^{-1} z ||
+    term1 = -jnp.linalg.norm(Q_bar2 @ v)
+    # term2 = (p2 - p1)^T \bar{Q}_1^{-1} z
+    term2 = jnp.dot(p2 - p1, v)
+
+    # 计算距离 h_{ij}
+    h = (term1 + term2 - 1.0) / v_norm
+
+    return h
+
+def optimize_supporting_hyperplane(p1, R1, Q1, p2, R2, Q2, num_steps=20, lr=0.1):
+    """
+    利用梯度上升寻找最优的 z 向量，使得 h_{ij} 最大化 (消除保守性, 等价于寻找真实最短距离)
+    对标论文中的公式 (20) ~ (24)
+    """
+    # 初始化 z: 一个比较好的初值是从 p1 指向 p2 的方向
+    dp = p2 - p1
+    z_init = dp / (jnp.linalg.norm(dp) + 1e-8)
+
+    def body_fn(i, z_val):
+        # 1. 计算 h_ij 关于 z 的梯度: \partial h_{ij} / \partial z
+        grad_h = jax.grad(compute_h_ij, argnums=6)(p1, R1, Q1, p2, R2, Q2, z_val)
+
+        # 2. 梯度上升更新 z (等价于论文中切空间上的虚拟输入 u_z)
+        z_new = z_val + lr * grad_h
+
+        # 3. 投影回单位圆 (保证 ||z|| = 1)
+        z_new = z_new / jnp.linalg.norm(z_new)
+        return z_new
+
+    # 使用 jax.lax.fori_loop 进行高效的图内循环迭代
+    z_opt = jax.lax.fori_loop(0, num_steps, body_fn, z_init)
+
+    # 计算最终收敛的准确距离
+    exact_distance = compute_h_ij(p1, R1, Q1, p2, R2, Q2, z_opt)
+
+    return exact_distance, z_opt
+
+def calc_rsh_distance(s1: jnp.ndarray, s2: jnp.ndarray) -> jnp.ndarray:
+    """
+    主接口函数：计算两个车辆（椭球建模）之间的真实 RSH 安全距离
+    假设 state s 的结构为: [x, y, v_x, v_y, theta, omega, length, width]
+    """
+    # 提取位置 p
+    p1 = s1[:2]
+    p2 = s2[:2]
+
+    # 提取旋转矩阵 R
+    R1 = calc_2d_rot_matrix(s1[4])
+    R2 = calc_2d_rot_matrix(s2[4])
+
+    # 提取车辆的 长 L 和 宽 W
+    L1, W1 = s1[6], s1[7]
+    L2, W2 = s2[6], s2[7]
+
+    # 乘以 sqrt(2) 确保椭圆刚好包住矩形的四个角
+    sqrt_2 = jnp.sqrt(2.0)
+
+    Q1 = jnp.array([[(sqrt_2 / 2.0) * L1, 0.0],[0.0,                 (sqrt_2 / 2.0) * W1]
+                    ])
+
+    Q2 = jnp.array([[(sqrt_2 / 2.0) * L2, 0.0],[0.0,                 (sqrt_2 / 2.0) * W2]
+                    ])
+    # 提取形状矩阵 Q (椭球的长半轴和短半轴)
+    # 矩形的长宽分别对应椭球的两个轴径 (length/2, width/2)
+   # Q1 = jnp.array([[s1[6] / 2.0, 0.0],
+        #            [0.0, s1[7] / 2.0]])
+   # Q2 = jnp.array([[s2[6] / 2.0, 0.0],[0.0, s2[7] / 2.0]])
+
+    # 计算最优支撑超平面距离 (迭代寻找真实距离)
+    distance, optimal_z = optimize_supporting_hyperplane(p1, R1, Q1, p2, R2, Q2, num_steps=10, lr=0.2)
+
+    return distance
+
+
+def calc_rsh_distance_bound(s: jnp.ndarray,
+                            n: jnp.ndarray,
+                            b: jnp.ndarray) -> jnp.ndarray:
+    """
+    车辆（椭球建模）到半空间边界的 RSH 距离，论文 eq.(19) 对半平面边界的解析特化版。
+
+    推导：当 "E_j" 退化为半空间 {q: nᵀq >= b[0]} 时，支撑超平面到边界的最大化距离
+    在最优 z = n 处取到解析解：h = nᵀpᵢ - b[0] - ||Q̄ᵢ n||
+    无需梯度迭代（∵ 边界为平面，最优 z 固定为 n）。
+
+    Args:
+        s:  agent state (state_dim,)，[x, y, vx, vy, θ(°), dθdt, bw(m), bh(m)]
+        n:  单位法向量 (2,)，指向安全区域内部（如下边界取 [0., 1.]）
+        b:  边界截距 (1,)，安全区域为 nᵀq >= b[0]
+
+    Returns:
+        h:  RSH 距离标量（米），h > 0 表示安全，与 calc_rsh_distance 量纲一致
+    """
+    p_i = s[:2]
+    theta_rad = s[4] * jnp.pi / 180.0
+    bw, bh = s[6], s[7]
+
+    # 旋转矩阵 R_i (与 calc_rsh_distance 中一致)
+    c, sin_ = jnp.cos(theta_rad), jnp.sin(theta_rad)
+    R_i = jnp.array([[c, -sin_], [sin_, c]])
+
+    # 半轴长（与 calc_rsh_distance 保持 √2/2 倍，使椭圆外接矩形四顶点）
+    sqrt_2 = jnp.sqrt(2.0)
+    q1 = (sqrt_2 / 2.0) * bw   # 长方向半轴
+    q2 = (sqrt_2 / 2.0) * bh   # 宽方向半轴
+
+    # ||Q̄_i n|| = sqrt((q1*(R_iᵀn)[0])² + (q2*(R_iᵀn)[1])²)
+    # 其中 R_i^T = [[c, sin_],[-sin_, c]]
+    r = R_i.T @ n   # shape (2,)，n 在车身坐标系下的分量
+    norm_Q_bar_n = jnp.sqrt((q1 * r[0]) ** 2 + (q2 * r[1]) ** 2)
+
+    # h = nᵀpᵢ - b[0] - ||Q̄ᵢ n||
+    return jnp.dot(n, p_i) - b[0] - norm_Q_bar_n

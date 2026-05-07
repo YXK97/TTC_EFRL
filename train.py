@@ -210,7 +210,7 @@ def main():
 
     # algorithm arguments
     parser.add_argument("--cost-weight", type=float, default=0.)
-    parser.add_argument('--lagr-init', type=float, default=0.78)
+    parser.add_argument('--lagr-init', type=float, default=0.78)#0.78
     parser.add_argument('--lr-lagr', type=float, default=1e-7)
     parser.add_argument('--clip-eps', type=float, default=0.25)
     parser.add_argument("--gamma", type=float, default=0.99)

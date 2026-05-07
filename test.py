@@ -23,6 +23,8 @@ def test(args):
     from defmarl.trainer.data import Rollout
     from defmarl.trainer.utils import eval_rollout
     from defmarl.utils.utils import jax_jit_np, jax_vmap, parse_jax_array
+    # ✅ 关键修正：正确导入 MVE（路径和原代码完全一致）
+    from defmarl.env.mve import MVE
 
     n_gpu = jax.local_device_count()
     print(f"> Running test.py {args}")
@@ -30,7 +32,6 @@ def test(args):
 
     stamp_str = datetime.datetime.now().strftime("%m%d-%H%M")
 
-    # set up environment variables and seed
     os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
     if args.cpu:
         os.environ["JAX_PLATFORM_NAME"] = "cpu"
@@ -38,12 +39,10 @@ def test(args):
         jax.config.update("jax_disable_jit", True)
     np.random.seed(args.seed)
 
-    # load config
     if args.path is not None:
         with open(os.path.join(args.path, "config.yaml"), "r") as f:
             config = yaml.load(f, Loader=yaml.UnsafeLoader)
 
-    # create environments
     num_agents = config.num_agents if args.num_agents is None else args.num_agents
     env = make_env(
         env_id=config.env if args.env is None else args.env,
@@ -86,6 +85,7 @@ def test(args):
         use_lstm=config.use_lstm,
     )
     algo.load(model_path, from_iter)
+
     if args.stochastic:
         def act_fn(x, z, rnn_state, key):
             action, _, new_rnn_state = algo.step(x, z, rnn_state, key)
@@ -93,6 +93,7 @@ def test(args):
         act_fn = jax.jit(act_fn)
     else:
         act_fn = algo.act
+
     z_fn = algo.get_opt_z if hasattr(algo, "get_opt_z") else None
     if args.z is not None:
         if args.z == "min":
@@ -103,12 +104,10 @@ def test(args):
                 (jnp.array([[-env.reward_min]]).repeat(env.num_agents, axis=0), value_rnn_state)
         else:
             raise ValueError(f"Unknown z: {args.z}")
+
     act_fn = jax.jit(act_fn)
     init_rnn_state = algo.init_rnn_state
-    if hasattr(algo, "init_Vh_rnn_state"):
-        init_Vh_rnn_state = algo.init_Vh_rnn_state
-    else:
-        init_Vh_rnn_state = None
+    init_Vh_rnn_state = algo.init_Vh_rnn_state if hasattr(algo, "init_Vh_rnn_state") else None
 
     test_key = jr.PRNGKey(args.seed)
     test_keys = jr.split(test_key, args.epi)
@@ -133,10 +132,32 @@ def test(args):
 
     for i_epi in range(args.epi):
         key_x0, _ = jr.split(test_keys[i_epi], 2)
-
         rollout: Rollout = rollout_fn(key_x0)
 
-        # is_unsafes.append(is_unsafe_fn(rollout.graph))
+        T_graph = rollout.graph
+        T = T_graph.states.shape[0]
+        positions = []
+
+        for t in range(T):
+            graph_t = jax.tree_util.tree_map(lambda x: x[t], T_graph)
+            agent_states_t = graph_t.type_states(type_idx=MVE.AGENT, n_type=env.num_agents)
+            positions.append(agent_states_t[:, :2])
+
+        positions = jnp.stack(positions)  # shape: (T, N, 2)
+        T, N, _ = positions.shape
+
+        # 保存 CSV
+        pos_dir = os.path.join(args.path, "agent_positions_correct")
+        os.makedirs(pos_dir, exist_ok=True)
+        csv_path = os.path.join(pos_dir, f"epi{i_epi:02d}_positions.csv")
+        with open(csv_path, "w") as f:
+            f.write("time_step,agent_id,x,y\n")
+            for t in range(T):
+                for n in range(N):
+                    x, y = positions[t, n]
+                    f.write(f"{t},{n},{x:.6f},{y:.6f}\n")
+        print(f"csv保存位置: {csv_path}")
+        
         is_unsafes.append(jnp.any(rollout.costs_real >= 1e-6, axis=-1))
         epi_reward = rollout.rewards.sum()
         epi_cost = rollout.costs.max()
@@ -162,14 +183,12 @@ def test(args):
         f"safe_rate: {safe_mean * 100:.3f}%, std: {safe_std * 100:.3f}%"
     )
 
-    # save results
     if args.log:
         with open(os.path.join(path, "test_log.csv"), "a") as f:
             f.write(f"{env.num_agents},{args.epi},{env.max_episode_steps},"
                     f"{env.area_size},{env.params['n_obs']},"
                     f"{safe_mean * 100:.3f},{safe_std * 100:.3f}\n")
 
-    # make video
     if args.no_video:
         return
 
@@ -186,14 +205,9 @@ def test(args):
 def main():
     parser = argparse.ArgumentParser()
 
-    # required arguments
     parser.add_argument("--path", type=str, required=True)
-
-    # environment arguments
     parser.add_argument("--reward_min", type=float, default=None)
     parser.add_argument("--reward_max", type=float, default=None)
-
-    # optional arguments
     parser.add_argument("--epi", type=int, default=5)
     parser.add_argument("--no-video", action="store_true", default=False)
     parser.add_argument("--from-iter", type=int, default=None)
@@ -209,8 +223,7 @@ def main():
     parser.add_argument("--debug", action="store_true", default=False)
     parser.add_argument("--dpi", type=int, default=100)
     parser.add_argument("-z", type=str, default=None)
-    parser.add_argument("--area-size", type=parse_jax_array, default=None,
-                        help='输入jax数组，一维用逗号分隔（如10,20），二维用分号+逗号（如10,20;30,40）')
+    parser.add_argument("--area-size", type=parse_jax_array, default=None)
     parser.add_argument("--offset", type=int, default=0)
     parser.add_argument("--visible-devices", type=str, default=None)
 
