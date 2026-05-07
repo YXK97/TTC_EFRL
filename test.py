@@ -121,7 +121,7 @@ def test(args):
                             z_fn=z_fn,
                             stochastic=args.stochastic)
     rollout_fn = jax_jit_np(rollout_fn)
-    is_unsafe_fn = jax_jit_np(jax_vmap(env.unsafe_mask))
+    # is_unsafe_fn = jax_jit_np(jax_vmap(env.unsafe_mask))
 
     rewards = []
     costs = []
@@ -133,23 +133,14 @@ def test(args):
     for i_epi in range(args.epi):
         key_x0, _ = jr.split(test_keys[i_epi], 2)
         rollout: Rollout = rollout_fn(key_x0)
-        is_unsafes.append(is_unsafe_fn(rollout.graph))
 
-        # =======================================================================
-        # ====================== ✅ 100% 匹配视频逻辑的提取 =====================
-        # =======================================================================
         T_graph = rollout.graph
         T = T_graph.states.shape[0]
         positions = []
 
         for t in range(T):
-            # 完全复刻视频代码：索引到时间步 t
             graph_t = jax.tree_util.tree_map(lambda x: x[t], T_graph)
-
-            # 完全复刻视频代码：type_states(MVE.AGENT) 取智能体状态
             agent_states_t = graph_t.type_states(type_idx=MVE.AGENT, n_type=env.num_agents)
-
-            # 取前两列作为 x, y（和视频 agents_state[:, :2] 完全一致）
             positions.append(agent_states_t[:, :2])
 
         positions = jnp.stack(positions)  # shape: (T, N, 2)
@@ -165,10 +156,9 @@ def test(args):
                 for n in range(N):
                     x, y = positions[t, n]
                     f.write(f"{t},{n},{x:.6f},{y:.6f}\n")
-        print(f"✅ 【视频同款】已保存正确智能体位置: {csv_path}")
-        # =======================================================================
-
-        # ========== 以下代码保持原有逻辑，完全不变 ==========
+        print(f"csv保存位置: {csv_path}")
+        
+        is_unsafes.append(jnp.any(rollout.costs_real >= 1e-6, axis=-1))
         epi_reward = rollout.rewards.sum()
         epi_cost = rollout.costs.max()
         epi_cost_real = rollout.costs_real.max()

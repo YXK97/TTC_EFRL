@@ -72,7 +72,7 @@ def test(args):
                             lateral_controller_pid,
                             longitudinal_controller)
     rollout_fn = jax_jit_np(rollout_fn)
-    is_unsafe_fn = jax_jit_np(jax_vmap(env.unsafe_mask))
+    # is_unsafe_fn = jax_jit_np(jax_vmap(env.unsafe_mask))
 
     rewards = []
     costs = []
@@ -86,7 +86,7 @@ def test(args):
         key_x0, _ = jr.split(test_keys[i_epi], 2)
 
         rollout, record = rollout_fn(key_x0)
-        is_unsafes.append(is_unsafe_fn(rollout.graph))
+        is_unsafes.append(jnp.any(rollout.costs_real >= 1e-6, axis=-1))
 
         dump_rollout_record_to_csv6(
             rollout, record,
