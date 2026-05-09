@@ -23,8 +23,7 @@ from defmarl.utils.graph import EdgeBlock, GetGraph, GraphsTuple
 from defmarl.utils.typing import Action, Reward, Cost, Array, State, AgentState, ObstState, Done, Info
 from defmarl.utils.utils import tree_index, MutablePatchCollection, save_anim, calc_2d_rot_matrix, \
     find_closest_goal_indices, gen_i_j_pairs, gen_i_j_pairs_no_identical, normalize_angle
-from ..utils.scaling import scaling_calc, scaling_calc_bound , calc_rsh_distance
-
+from defmarl.utils.scaling_lowspeed import scaling_calc, scaling_calc_bound
 
 INF = jnp.inf
 
@@ -44,7 +43,8 @@ class MVELaneChangeAndOverTake_LowSpeed(MVE):
         "ego_Cf": 47850., # N/rad
         "ego_Cr": 46510., # N/rad00
         "comm_radius": 100,
-        "obst_bb_size": jnp.array([4., 2.]), # bounding box的[width, height] m
+        # "obst_bb_size": jnp.array([4., 2.]), # bounding box的[width, height] m
+        "obst_bb_size": jnp.array([2.625,1.647]), # bounding box的[width, height] m
         "obst_lr":0.9025,
 
         # [x_l, x_h, y_l, y_h, θ_l, θ_h, v_l, v_h, δ_l, δ_h, bw_l, bw_h, bh_l, bh_h, lr_l, lr_h]
@@ -304,20 +304,12 @@ class MVELaneChangeAndOverTake_LowSpeed(MVE):
         thresh = self.params["alpha_thresh"]
         num_agents = graph.env_states.agent.shape[0]
         num_obsts = graph.env_states.obstacle.shape[0]
+        # state: x y θ v δ bw bh lr
 
+        convert_vec = jnp.array([1., 1., 180/jnp.pi, 3.6, 180/jnp.pi, 1., 1., 1.])
         agent_states = graph.type_states(type_idx=MVE.AGENT, n_type=num_agents)
-        # 将Agent的后轴坐标转换为几何中心坐标
-        a_x = agent_states[:, 0]
-        a_y = agent_states[:, 1]
-        a_theta_rad = agent_states[:, 2] * jnp.pi / 180.0
-        a_lr = agent_states[:, -1]
+        agent_states_metric = agent_states / convert_vec
 
-        a_x_center = a_x + a_lr * jnp.cos(a_theta_rad)
-        a_y_center = a_y + a_lr * jnp.sin(a_theta_rad)
-
-        # 用中心坐标替换原来的后轴坐标，用于后续所有的碰撞检测
-        agent_states_center = agent_states.at[:, 0].set(a_x_center)
-        agent_states_center = agent_states_center.at[:, 1].set(a_y_center)
         # agent之间的scaling factor
         """
         if num_agents == 1:
@@ -342,9 +334,10 @@ class MVELaneChangeAndOverTake_LowSpeed(MVE):
             a_obst_cost_real = jnp.ones((num_agents,), dtype=jnp.float32)
         else:
             obstacle_states = graph.type_states(type_idx=MVE.OBST, n_type=num_obsts)
+            obstacle_states_metric = obstacle_states / convert_vec
             i_pairs, j_pairs = gen_i_j_pairs(num_agents, num_obsts)
-            state_i_pairs = agent_states_center[i_pairs, :]#更换为中心坐标
-            state_j_pairs = obstacle_states[j_pairs, :]
+            state_i_pairs = agent_states_metric[i_pairs, :] # 更换为中心坐标
+            state_j_pairs = obstacle_states_metric[j_pairs, :]
             alpha_pairs = jax.vmap(scaling_calc, in_axes=(0, 0))(state_i_pairs, state_j_pairs)
             alpha_matrix = alpha_pairs.reshape((num_agents, num_obsts))
             a_obst_cost = jnp.max(thresh-alpha_matrix, axis=1)
@@ -354,16 +347,18 @@ class MVELaneChangeAndOverTake_LowSpeed(MVE):
         # agent 和 bound 之间的scaling factor，只对y方向有约束
         state_range = self.params["default_state_range"]
         yl = state_range[2]
-        A = jnp.array([[0., 1.]])
-        b = jnp.array([yl])
-        a_bound_yl_cost = thresh - jax.vmap(scaling_calc_bound, in_axes=(0, None, None))(agent_states_center, A, b)#更换为中心坐标
-        a_bound_yl_cost_real = 1 - jax.vmap(scaling_calc_bound, in_axes=(0, None, None))(agent_states_center, A, b) # α*>1 表示真实安全
+        A_l = jnp.array([[0., 1.]])
+        b_l = jnp.array([yl])
+        a_bound_yl_alpha = jax.vmap(scaling_calc_bound, in_axes=(0, None, None))(agent_states_metric, A_l, b_l)
+        a_bound_yl_cost = thresh - a_bound_yl_alpha
+        a_bound_yl_cost_real = 1 - a_bound_yl_alpha # α*>1 表示真实安全
 
         yh = state_range[3]
-        A = jnp.array([[0., -1.]])
-        b = jnp.array([-yh])
-        a_bound_yh_cost = thresh - jax.vmap(scaling_calc_bound, in_axes=(0, None, None))(agent_states_center, A, b)#更换为中心坐标
-        a_bound_yh_cost_real = 1 - jax.vmap(scaling_calc_bound, in_axes=(0, None, None))(agent_states_center, A, b) # α*>1 表示真实安全
+        A_h = jnp.array([[0., -1.]])
+        b_h = jnp.array([-yh])
+        a_bound_yh_alpha = jax.vmap(scaling_calc_bound, in_axes=(0, None, None))(agent_states_metric, A_h, b_h)
+        a_bound_yh_cost = thresh - a_bound_yh_alpha
+        a_bound_yh_cost_real = 1 - a_bound_yh_alpha # α*>1 表示真实安全
 
         # a_bound_yl_cost = -jnp.ones((num_agents,), dtype=jnp.float32) # debug
         # a_bound_yh_cost = -jnp.ones((num_agents,), dtype=jnp.float32) # debug
@@ -570,13 +565,8 @@ class MVELaneChangeAndOverTake_LowSpeed(MVE):
             n_lr_t = graph.states[:-1, 7]
             n_radius = jnp.linalg.norm(n_bb_size_t, axis=1)
 
-            # 只把 Agent 的坐标由后轴转换为几何中心，其他保持原状
-            is_agent_t = np.arange(len(n_pos_t_raw)) < self.num_agents
-
-            c_x_all = np.where(is_agent_t, n_pos_t_raw[:, 0] + n_lr_t * np.cos(n_theta_t * np.pi / 180.0),
-                               n_pos_t_raw[:, 0])
-            c_y_all = np.where(is_agent_t, n_pos_t_raw[:, 1] + n_lr_t * np.sin(n_theta_t * np.pi / 180.0),
-                               n_pos_t_raw[:, 1])
+            c_x_all = n_pos_t_raw[:, 0] + n_lr_t * np.cos(n_theta_t * np.pi / 180.0)
+            c_y_all = n_pos_t_raw[:, 1] + n_lr_t * np.sin(n_theta_t * np.pi / 180.0)
             n_pos_t = np.stack([c_x_all, c_y_all], axis=1)
 
             # update agents' positions and labels
@@ -737,7 +727,7 @@ class MVELaneChangeAndOverTake_LowSpeed(MVE):
             node_feats = node_feats.at[num_agents + num_goals:, 5:7].set(self.params["obst_bb_size"])
             node_feats = node_feats.at[num_agents + num_goals:, 7].set(self.params["obst_lr"])
 
-    # indicators
+        # indicators
         node_feats = node_feats.at[:num_agents, -1].set(1.0)
         node_feats = node_feats.at[num_agents: num_agents + num_goals, -2].set(1.0)
         if num_obsts > 0:

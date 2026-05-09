@@ -23,7 +23,6 @@ def test(args):
     from defmarl.trainer.data import Rollout
     from defmarl.trainer.utils import eval_rollout
     from defmarl.utils.utils import jax_jit_np, jax_vmap, parse_jax_array
-    # ✅ 关键修正：正确导入 MVE（路径和原代码完全一致）
     from defmarl.env.mve import MVE
 
     n_gpu = jax.local_device_count()
