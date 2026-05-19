@@ -31,8 +31,19 @@ class MVEEnvState(NamedTuple): # Multi Vehicles Environment
     def n_agent(self) -> int:
         return self.agent.shape[0]
 
+class MVEEnvBoundState(NamedTuple): # Multi Vehicles Environment
+    agent: State
+    goal: State
+    bound: State
+    obstacle: State
+
+    @property
+    def n_agent(self) -> int:
+        return self.agent.shape[0]
 
 MVEEnvGraphsTuple = GraphsTuple[State, MVEEnvState]
+MVEEnvBoundGraphsTuple = GraphsTuple[State, MVEEnvBoundState]
+
 
 
 class MVE(MultiAgentEnv, ABC): # # Multi Vehicles Environment
@@ -41,14 +52,15 @@ class MVE(MultiAgentEnv, ABC): # # Multi Vehicles Environment
     AGENT = 0
     GOAL = 1
     OBST = 2
+    BOUND = 3
 
     PARAMS = {
         "ego_lf": 0.905, # m
         "ego_lr": 1.305, # m
-        "ego_bb_size": jnp.array([2.21, 1.48]), # bounding box的[width, height] m # TODO
+        "ego_bb_size": jnp.array([2.21, 1.48]), # bounding box的[width, height] m
         "comm_radius": 30,
         "n_obsts": 1,
-        "obst_bb_size": jnp.array([4.18, 1.99]), # bounding box的[width, height] m # TODO
+        "obst_bb_size": jnp.array([4.18, 1.99]), # bounding box的[width, height] m
         "collide_extra_bias": 0.1, # 用于计算cost时避碰的margin m
 
         "default_state_range": jnp.array([-35., 35., -9., 9., 0., 360., -5., 30.]), # [x_l, x_u, y_l, y_u, theta_l, theta_u, v_l, v_u]
@@ -493,7 +505,7 @@ class MVE(MultiAgentEnv, ABC): # # Multi Vehicles Environment
     def get_graph(self, env_state: MVEEnvState, obst_as_agent:bool = False) -> MVEEnvGraphsTuple:
         num_agents = env_state.agent.shape[0]
         num_goals = env_state.goal.shape[0]
-        num_obsts = env_state.obstacle.shape[0] # TODO: 为0时报错，但理论上可以为0
+        num_obsts = env_state.obstacle.shape[0]
         assert num_agents > 0 and num_goals > 0, "至少需要设定agent和goal!"
         assert num_agents == num_goals, "每一个agent对应一个goal"
         # node features

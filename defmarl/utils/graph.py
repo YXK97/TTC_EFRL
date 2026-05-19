@@ -119,7 +119,7 @@ class GraphsTuple(tuple, Generic[_State, _EnvState]):
         out = type_feats.reshape(self.batch_shape + (n_type, n_feats))
         return out
 
-    def type_states(self, type_idx: int, n_type: int) -> Float[Array, "... n_type n_states"]:
+    def type_states(self, type_idx: int, n_type: int) -> Float[Array, "... n_type n_states"]: # TODO：跟MVEEnvBoundGraphsTuple做适配
         assert self.states.ndim == 2
         n_states = self.states.shape[1]
 

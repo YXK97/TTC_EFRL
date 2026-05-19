@@ -15,7 +15,7 @@ from matplotlib.axes import Axes
 from matplotlib.collections import LineCollection
 from matplotlib.patches import FancyArrow
 
-from .mve import MVE, MVEEnvState, MVEEnvGraphsTuple
+from .mve import MVE, MVEEnvBoundState, MVEEnvBoundGraphsTuple
 from .designed_scene_gen_two_lane import gen_handmade_scene, gen_scene_randomly
 from .utils import process_lane_centers, process_lane_marks, relative_state
 from defmarl.trainer.data import Rollout, Record
@@ -46,6 +46,7 @@ class MVELaneChangeAndOverTake_LowSpeed(MVE):
         # "obst_bb_size": jnp.array([4., 2.]), # bounding box的[width, height] m
         "obst_bb_size": jnp.array([2.625,1.647]), # bounding box的[width, height] m
         "obst_lr":0.9025,
+        "bound_bb_size": jnp.array([5.,1.]),# TODO：
 
         # [x_l, x_h, y_l, y_h, θ_l, θ_h, v_l, v_h, δ_l, δ_h, bw_l, bw_h, bh_l, bh_h, lr_l, lr_h]
         # 单位：x,y,bw,bh,lr: m  v: km/h,  θ: °
@@ -132,18 +133,63 @@ class MVELaneChangeAndOverTake_LowSpeed(MVE):
         xrange = self.params["default_state_range"][:2]
         yrange = self.params["default_state_range"][2:4]
         lanewidth = self.params["lane_width"]
-        agents, obsts, all_goals, all_dsYddts = gen_scene_randomly(key, self.num_agents, self.num_goals, xrange, yrange, lanewidth, c_ycs)
-        # agents, obsts, all_goals, all_dsYddts = gen_handmade_scene(key, self.num_agents, self.num_goals, xrange, yrange, lanewidth, c_ycs)
+        # agents, obsts, all_goals, all_dsYddts = gen_scene_randomly(key, self.num_agents, self.num_goals, xrange, yrange, lanewidth, c_ycs)
+        agents, obsts, all_goals, all_dsYddts = gen_handmade_scene(key, self.num_agents, self.num_goals, xrange, yrange, lanewidth, c_ycs)
+        # TODO：使用generate_bound函数
+        bounds = self.generate_bound(agent_states=agents, bound_bb_size=self.params["bound_bb_size"])
+
         self.all_goals = all_goals
         self.all_dsYddts = all_dsYddts
         goals_init_indices = find_closest_goal_indices(agents, all_goals)
         agents_indices = jnp.arange(agents.shape[0])
         goals = all_goals[agents_indices, goals_init_indices, :]
         dsYddts = all_dsYddts[agents_indices, goals_init_indices, :]
-        env_state = MVEEnvState(agents, goals, obsts)
+        env_state = MVEEnvBoundState(agents, goals, bounds, obsts) #TODO:添加输入bound
         self.num_obsts = obsts.shape[0]
-
         return self.get_graph(env_state), dsYddts
+
+    # TODO：添加generate_bound，输入：agent_state(a,s)，输出：bound_state(a*2,s)
+    def generate_bound(self, agent_states: AgentState, bound_bb_size: Array) -> State:
+        num_agents = agent_states.shape[0]
+
+        # 车道 y 方向边界
+        y_low = self.params["default_state_range"][2]
+        y_high = self.params["default_state_range"][3]
+
+        # bound 矩形
+        bound_bb_size = jnp.asarray(bound_bb_size)
+        bound_bw = bound_bb_size[0]
+        bound_bh = bound_bb_size[1]
+
+        x = agent_states[:, 0]
+        # TODO:改为更加通用的，1/2 * （bound_height）
+        y_lower_bound = jnp.ones((num_agents,)) * (y_low - 1.0)
+        y_upper_bound = jnp.ones((num_agents,)) * (y_high + 1.0)
+
+        theta = jnp.zeros((num_agents,))
+        v = jnp.zeros((num_agents,))
+        delta = jnp.zeros((num_agents,))
+        bw = jnp.ones((num_agents,)) * bound_bw
+        bh = jnp.ones((num_agents,)) * bound_bh
+        lr = jnp.zeros((num_agents,))
+
+        lower_bound_states = jnp.stack(
+            [x, y_lower_bound, theta, v, delta, bw, bh, lr],
+            axis=1
+        )
+
+        upper_bound_states = jnp.stack(
+            [x, y_upper_bound, theta, v, delta, bw, bh, lr],
+            axis=1
+        )
+        bound_states = jnp.stack(
+            [lower_bound_states, upper_bound_states],
+            axis=1
+        )
+        bound_states = bound_states.reshape(num_agents * 2, self.state_dim)
+        assert bound_states.shape == (num_agents * 2, self.state_dim)
+
+        return bound_states
 
     @override
     def agent_step_euler(self, aS_agent_states, aS_goal_states, ad_action): #对agent，使用3-DOF自行车运动学模型,车辆中心在后轴中心
@@ -229,8 +275,8 @@ class MVELaneChangeAndOverTake_LowSpeed(MVE):
 
     @override
     def step(
-            self, graph: MVEEnvGraphsTuple, action: Action, get_eval_info: bool = False
-    ) -> Tuple[MVEEnvGraphsTuple, jnp.ndarray, Reward, Cost, Cost, Done, Info]:
+            self, graph: MVEEnvBoundGraphsTuple, action: Action, get_eval_info: bool = False
+    ) -> Tuple[MVEEnvBoundState, jnp.ndarray, Reward, Cost, Cost, Done, Info]:
         # get information from graph
         agent_states = graph.type_states(type_idx=MVE.AGENT, n_type=self.num_agents)
         goal_states = graph.type_states(type_idx=MVE.GOAL, n_type=self.num_agents)
@@ -240,8 +286,11 @@ class MVELaneChangeAndOverTake_LowSpeed(MVE):
         # calculate next graph
         action = self.transform_action(action)
         next_agent_states = self.agent_step_euler(agent_states, goal_states, action)
+
+        # TODO：用generate_bound函数
+        next_bounds_states = self.generate_bound(next_agent_states, bound_bb_size = self.params['bound_bb_size'])
         next_goal_states, next_dsYddts = self.goal_dsYddt_step(next_agent_states)
-        next_env_state = MVEEnvState(next_agent_states, next_goal_states, next_obst_states)
+        next_env_state = MVEEnvBoundState(next_agent_states, next_goal_states, next_bounds_states, next_obst_states) #TODO:添加输入bound
         info = {}
 
         # the episode ends when reaching max_episode_steps
@@ -278,7 +327,7 @@ class MVELaneChangeAndOverTake_LowSpeed(MVE):
 
         return self.get_graph(next_env_state), next_dsYddts, reward, cost, cost_real, done, info
 
-    def get_reward(self, graph: MVEEnvGraphsTuple, ad_action: Action) -> Reward:
+    def get_reward(self, graph: MVEEnvBoundGraphsTuple, ad_action: Action) -> Reward:
         num_agents = graph.env_states.agent.shape[0]
         num_goals = graph.env_states.goal.shape[0]
         assert num_agents == num_goals
@@ -299,7 +348,7 @@ class MVELaneChangeAndOverTake_LowSpeed(MVE):
 
         return reward
 
-    def get_cost(self, graph: MVEEnvGraphsTuple) -> Tuple[Cost, Cost]:
+    def get_cost(self, graph: MVEEnvBoundGraphsTuple) -> Tuple[Cost, Cost]:
         """使用射线法计算的scaling factor：α为cost的评判指标，thresh-α<0安全，>=0不安全"""
         thresh = self.params["alpha_thresh"]
         num_agents = graph.env_states.agent.shape[0]
@@ -410,6 +459,7 @@ class MVELaneChangeAndOverTake_LowSpeed(MVE):
         T_goal_states = jax.vmap(lambda x: x.type_states(type_idx=MVE.GOAL, n_type=self.num_agents))(rollout.graph)
         ref_goals = T_goal_states[:, :, :2]
         n_goals = self.num_agents if n_goals is None else n_goals
+        n_bounds = 2 * self.num_agents
 
         ax: Axes
         xlim = self.params["rollout_state_range"][:2]
@@ -449,7 +499,6 @@ class MVELaneChangeAndOverTake_LowSpeed(MVE):
         obsts_bb_size = obsts_state[:, 5:7]
         obsts_lr = obsts_state[:, 7]
         obsts_radius = jnp.linalg.norm(obsts_bb_size, axis=1)
-        # TODO: 更改车辆中心为车体中心 xy
         obsts_pos_center_x = obsts_pos_rear[:, 0] + obsts_lr * jnp.cos(obsts_theta * jnp.pi / 180.0)
         obsts_pos_center_y = obsts_pos_rear[:, 1] + obsts_lr * jnp.sin(obsts_theta * jnp.pi / 180.0)
         obsts_pos = jnp.stack([obsts_pos_center_x, obsts_pos_center_y], axis=1)
@@ -509,7 +558,7 @@ class MVELaneChangeAndOverTake_LowSpeed(MVE):
         all_pos = jnp.stack([all_pos_x, all_pos_y], axis=1)
 
         edge_index = np.stack([graph0.senders, graph0.receivers], axis=0)
-        is_pad = np.any(edge_index == self.num_agents + n_goals + self.num_obsts, axis=0)
+        is_pad = np.any(edge_index == self.num_agents + n_goals + self.num_obsts + n_bounds, axis=0)
         e_edge_index = edge_index[:, ~is_pad]
         e_start, e_end = all_pos[e_edge_index[0, :]], all_pos[e_edge_index[1, :]]
         e_lines = np.stack([e_start, e_end], axis=1)  # (e, n_pts, dim)
@@ -581,18 +630,18 @@ class MVELaneChangeAndOverTake_LowSpeed(MVE):
 
             # update obstacles' positions
             for ii in range(self.num_obsts):
-                plot_obsts_arrow[ii].set_data(x=n_pos_t[self.num_agents+n_goals+ii, 0],
-                                              y=n_pos_t[self.num_agents+n_goals+ii, 1],
-                                              dx=jnp.cos(n_theta_t[self.num_agents+n_goals+ii]*jnp.pi/180)*n_radius[
+                plot_obsts_arrow[ii].set_data(x=n_pos_t[self.num_agents+n_goals+n_bounds+ii, 0],
+                                              y=n_pos_t[self.num_agents+n_goals+n_bounds+ii, 1],
+                                              dx=jnp.cos(n_theta_t[self.num_agents+n_goals+n_bounds+ii]*jnp.pi/180)*n_radius[
                                                   self.num_agents+n_goals+ii]/2,
-                                              dy=jnp.sin(n_theta_t[self.num_agents+n_goals+ii]*jnp.pi/180)*n_radius[
+                                              dy=jnp.sin(n_theta_t[self.num_agents+n_goals+n_bounds+ii]*jnp.pi/180)*n_radius[
                                                   self.num_agents+n_goals+ii]/2)
-                plot_obsts_rec[ii].set_xy(xy=tuple(n_pos_t[self.num_agents+n_goals+ii, :]-n_bb_size_t[self.num_agents+n_goals+ii, :]/2))
-                plot_obsts_rec[ii].set_angle(angle=n_theta_t[self.num_agents+n_goals+ii])
+                plot_obsts_rec[ii].set_xy(xy=tuple(n_pos_t[self.num_agents+n_goals+n_bounds+ii, :]-n_bb_size_t[self.num_agents+n_goals+n_bounds+ii, :]/2))
+                plot_obsts_rec[ii].set_angle(angle=n_theta_t[self.num_agents+n_goals+n_bounds+ii])
 
             # update edges
             e_edge_index_t = np.stack([graph.senders, graph.receivers], axis=0)
-            is_pad_t = np.any(e_edge_index_t == self.num_agents + n_goals + self.num_obsts, axis=0)
+            is_pad_t = np.any(e_edge_index_t == self.num_agents + n_goals + n_bounds + self.num_obsts, axis=0)
             e_edge_index_t = e_edge_index_t[:, ~is_pad_t]
             e_start_t, e_end_t = n_pos_t[e_edge_index_t[0, :]], n_pos_t[e_edge_index_t[1, :]]
             e_is_goal_t = (self.num_agents <= graph.senders) & (graph.senders < self.num_agents + n_goals)
@@ -636,9 +685,10 @@ class MVELaneChangeAndOverTake_LowSpeed(MVE):
         ani = FuncAnimation(fig, update, frames=anim_T, init_func=init_fn, interval=mspf, blit=True)
         save_anim(ani, video_path)
 
-    def edge_blocks(self, state: MVEEnvState) -> List[EdgeBlock]:
+    def edge_blocks(self, state: MVEEnvBoundState) -> List[EdgeBlock]:
         num_agents = state.agent.shape[0]
         num_goals = state.goal.shape[0]
+        num_bounds = state.bound.shape[0]
         assert num_agents == num_goals
         num_obsts = state.obstacle.shape[0]
 
@@ -671,6 +721,40 @@ class MVELaneChangeAndOverTake_LowSpeed(MVE):
             agent_goal_edges.append(EdgeBlock(rel_state[None, None, :], jnp.ones((1, 1)),
                                               jnp.array([i_agent]), jnp.array([i_agent + self.num_agents])))
 
+        # TODO:添加agent和bounds的连接
+        # agent - bound connection
+        agent_bound_edges = []
+        assert num_bounds == num_agents * 2
+
+        for i_agent in range(num_agents):
+            agent_state_i = state.agent[i_agent]
+
+            lower_bound_state_i = state.bound[2 * i_agent]
+            upper_bound_state_i = state.bound[2 * i_agent + 1]
+
+            rel_state_lower = agent_state_i - lower_bound_state_i
+            rel_state_upper = agent_state_i - upper_bound_state_i
+
+            id_lower_bound = num_agents + num_goals + 2 * i_agent
+            id_upper_bound = num_agents + num_goals + 2 * i_agent + 1
+
+            agent_bound_edges.append(
+                EdgeBlock(
+                    rel_state_lower[None, None, :],
+                    jnp.ones((1, 1)),
+                    jnp.array([i_agent]),
+                    jnp.array([id_lower_bound])
+                )
+            )
+
+            agent_bound_edges.append(
+                EdgeBlock(
+                    rel_state_upper[None, None, :],
+                    jnp.ones((1, 1)),
+                    jnp.array([i_agent]),
+                    jnp.array([id_upper_bound])
+                )
+            )
         # agent - obstacle connection
         agent_obst_edges = []
         if num_obsts > 0:
@@ -678,7 +762,8 @@ class MVELaneChangeAndOverTake_LowSpeed(MVE):
             poss_diff = agent_pos[:, None, :] - obs_pos[None, :, :]
             dist = jnp.linalg.norm(poss_diff, axis=-1)
             agent_obs_mask = jnp.less(dist, self.params["comm_radius"])
-            id_obs = jnp.arange(num_obsts) + num_agents * 2
+            #  id_obs = jnp.arange(num_obsts) + num_agents * 2
+            id_obs = jnp.arange(num_obsts) + num_agents + num_goals + num_bounds
             i_pairs, j_pairs = gen_i_j_pairs(num_agents, num_obsts)
             agent_state_i_pairs = state.agent[i_pairs, :]
             obst_state_j_pairs = state.obstacle[j_pairs, :]
@@ -698,22 +783,25 @@ class MVELaneChangeAndOverTake_LowSpeed(MVE):
                         agent_goal_mask=agent_goal_mask)
         """
 
-        return agent_goal_edges + agent_obst_edges # 跟踪任务debug
+        return agent_goal_edges + agent_bound_edges + agent_obst_edges # 跟踪任务debug
 
     @override
-    def get_graph(self, env_state: MVEEnvState, obst_as_agent:bool = False) -> MVEEnvGraphsTuple:
+    def get_graph(self, env_state: MVEEnvBoundState, obst_as_agent:bool = False) -> MVEEnvBoundGraphsTuple:
         num_agents = env_state.agent.shape[0]
         num_goals = env_state.goal.shape[0]
-        num_obsts = env_state.obstacle.shape[0] # TODO: 为0时报错，但理论上可以为0
+        num_bounds = env_state.bound.shape[0]
+        num_obsts = env_state.obstacle.shape[0]
         assert num_agents > 0 and num_goals > 0, "至少需要设定agent和goal!"
         assert num_agents == num_goals, "每一个agent对应一个goal"
+        assert num_bounds == num_agents * 2
         # node features
         # states
-        node_feats = jnp.zeros((num_agents + num_goals + num_obsts, self.node_dim))
+        node_feats = jnp.zeros((num_agents + num_goals + num_bounds + num_obsts, self.node_dim))
         node_feats = node_feats.at[:num_agents, :self.state_dim].set(env_state.agent)
         node_feats = node_feats.at[num_agents: num_agents + num_goals, :self.state_dim].set(env_state.goal)
+        node_feats = node_feats.at[num_agents + num_goals: num_agents + num_goals + num_bounds, :self.state_dim].set(env_state.bound)
         if num_obsts > 0:
-            node_feats = node_feats.at[num_agents + num_goals:, :self.state_dim].set(env_state.obstacle)
+            node_feats = node_feats.at[num_agents + num_goals + num_bounds:, :self.state_dim].set(env_state.obstacle)
 
         # bounding box 长宽和lr
         # state: x y θ v δ bw bh lr
@@ -723,37 +811,44 @@ class MVELaneChangeAndOverTake_LowSpeed(MVE):
         else:
             node_feats = node_feats.at[:num_agents, 5:7].set(self.params["ego_bb_size"])
             node_feats = node_feats.at[:num_agents, 7].set(self.params["ego_lr"])
+        node_feats = node_feats.at[num_agents + num_goals: num_agents + num_goals + num_bounds, 5:7].set(self.params["bound_bb_size"])# TODO
         if num_obsts > 0:
-            node_feats = node_feats.at[num_agents + num_goals:, 5:7].set(self.params["obst_bb_size"])
-            node_feats = node_feats.at[num_agents + num_goals:, 7].set(self.params["obst_lr"])
+            node_feats = node_feats.at[num_agents + num_goals + num_bounds:, 5:7].set(self.params["obst_bb_size"])
+            node_feats = node_feats.at[num_agents + num_goals + num_bounds:, 7].set(self.params["obst_lr"])
 
         # indicators
         node_feats = node_feats.at[:num_agents, -1].set(1.0)
         node_feats = node_feats.at[num_agents: num_agents + num_goals, -2].set(1.0)
+        node_feats = node_feats.at[num_agents +num_goals: num_agents + num_goals + num_bounds, -3].set(1.0)
         if num_obsts > 0:
-            node_feats = node_feats.at[num_agents + num_goals:, -3].set(1.0)
+            node_feats = node_feats.at[num_agents + num_goals +  num_bounds:, -3].set(1.0)
 
         # node type
-        node_type = -jnp.ones((num_agents + num_goals + num_obsts), dtype=jnp.int32)
+        node_type = -jnp.ones((num_agents + num_goals + num_bounds + num_obsts), dtype=jnp.int32)
         node_type = node_type.at[:num_agents].set(MVE.AGENT)
         node_type = node_type.at[num_agents: num_agents + num_goals].set(MVE.GOAL)
+        node_type = node_type.at[num_agents + num_goals: num_agents + num_goals +num_bounds].set(MVE.BOUND)
         if num_obsts > 0:
-            node_type = node_type.at[num_agents + num_goals:].set(MVE.OBST)
+            node_type = node_type.at[num_agents + num_goals +num_bounds:].set(MVE.OBST)
 
         # edges
         edge_blocks = self.edge_blocks(env_state)
 
         # create graph
-        states = jnp.concatenate([node_feats[:num_agents, :-3], node_feats[num_agents: num_agents + num_goals, :-3]],
-                                 axis=0)
+        # states = jnp.concatenate([node_feats[:num_agents, :-3], node_feats[num_agents: num_agents + num_goals, :-3], node_feats[num_agents: num_agents + num_goals + num_bounds, :-3]],
+        #                         axis=0)
+        states = node_feats[: num_agents + num_goals + num_bounds, :-3]
+        # states = node_feats[:, :self.state_dim]
         if num_obsts > 0:
-            states = jnp.concatenate([states, node_feats[num_agents + num_goals:, :-3]], axis=0)
-            new_env_state = MVEEnvState(node_feats[:num_agents, :-3],
+            states = jnp.concatenate([states, node_feats[num_agents + num_bounds + num_goals:, :-3]], axis=0)
+            new_env_state = MVEEnvBoundState(node_feats[:num_agents, :-3],
                                         node_feats[num_agents: num_agents + num_goals, :-3],
-                                        node_feats[num_agents + num_goals:, :-3])
+                                        node_feats[num_agents + num_goals: num_agents + num_goals + num_bounds, :-3],
+                                        node_feats[num_agents + num_goals + num_bounds:, :-3])
         else:
-            new_env_state = MVEEnvState(node_feats[:num_agents, :-3],
+            new_env_state = MVEEnvBoundState(node_feats[:num_agents, :-3],
                                         node_feats[num_agents: num_agents + num_goals, :-3],
+                                        node_feats[num_agents + num_goals: num_agents + num_goals +num_bounds, :-3],
                                         jnp.empty((0, self.state_dim)))
         return GetGraph(node_feats, node_type, edge_blocks, new_env_state, states).to_padded()
 
