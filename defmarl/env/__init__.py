@@ -6,6 +6,7 @@ from defmarl.env.mve_normedGraph import MVENormedGraph
 from defmarl.env.mve_normedGraph_CBF import MVENormedGraph_CBF
 from defmarl.env.mve_lowspeed import MVELaneChangeAndOverTake_LowSpeed
 from defmarl.env.mve_lanechange_rsh import MVELaneChangeAndOverTake_RSH
+from defmarl.env.mve_lowspeed_bound import MVELaneChangeAndOverTake_LowSpeed_Bound
 
 ENV = {
     'MVELaneChange': MVELaneChangeAndOverTake,
@@ -13,6 +14,7 @@ ENV = {
     'MVENormedGraph_CBF': MVENormedGraph_CBF,
     'MVELaneChangeAndOverTake_LowSpeed': MVELaneChangeAndOverTake_LowSpeed,
     'MVELaneChangeAndOverTake_RSH': MVELaneChangeAndOverTake_RSH,
+    'MVELaneChangeAndOverTake_LowSpeed_Bound': MVELaneChangeAndOverTake_LowSpeed_Bound,
 }
 
 
