@@ -839,14 +839,14 @@ class MVELaneChangeAndOverTake_LowSpeed(MVE):
         if num_obsts > 0:
             states = jnp.concatenate([states, node_feats[num_agents + num_bounds + num_goals:, :-3]], axis=0)
             new_env_state = MVEEnvBoundState(node_feats[:num_agents, :-3],
-                                        node_feats[num_agents: num_agents + num_goals, :-3],
-                                        node_feats[num_agents + num_goals: num_agents + num_goals + num_bounds, :-3],
-                                        node_feats[num_agents + num_goals + num_bounds:, :-3])
+                                             node_feats[num_agents: num_agents + num_goals, :-3],
+                                             node_feats[num_agents + num_goals: num_agents + num_goals + num_bounds, :-3],
+                                             node_feats[num_agents + num_goals + num_bounds:, :-3])
         else:
             new_env_state = MVEEnvBoundState(node_feats[:num_agents, :-3],
-                                        node_feats[num_agents: num_agents + num_goals, :-3],
-                                        node_feats[num_agents + num_goals: num_agents + num_goals +num_bounds, :-3],
-                                        jnp.empty((0, self.state_dim)))
+                                             node_feats[num_agents: num_agents + num_goals, :-3],
+                                             node_feats[num_agents + num_goals: num_agents + num_goals +num_bounds, :-3],
+                                             jnp.empty((0, self.state_dim)))
         return GetGraph(node_feats, node_type, edge_blocks, new_env_state, states).to_padded()
 
     @override
