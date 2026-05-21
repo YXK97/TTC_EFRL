@@ -11,3 +11,6 @@ r-critic-init 1e-3 --lr-critic-decay-ratio 100 --lr-critic-warmup-iters 20000 --
 
 
 需要CUDA 11.8和 cudnn 8.6
+conda通过yml文件安装虚拟环境时并不会安装CUDA和cudnn，需要手动从NVIDIA官网安装
+
+实车部署的ROS2 Galactic也需要从ROS官网手动安装
