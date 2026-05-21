@@ -252,21 +252,22 @@ class MVENormedGraph_CBF(MVE):
         agent_states = graph.type_states(type_idx=MVE.AGENT, n_type=self.num_agents)
         goal_states = graph.type_states(type_idx=MVE.GOAL, n_type=self.num_agents) # debug
         obst_states = graph.type_states(type_idx=MVE.OBST, n_type=self.num_obsts)
-        next_obst_states = self.obst_step_euler(obst_states)
+        action = self.transform_action(action)
+
+        # calculate reward and cost
+        reward = self.get_reward(graph, action)
+        cost, cost_real = self.get_cost(graph, action)
 
         # calculate next graph
-        action = self.transform_action(action)
         next_agent_states = self.agent_step_euler(agent_states, action)
         next_goal_states = self.goal_step(next_agent_states)
+        next_obst_states = self.obst_step_euler(obst_states)
         next_env_state = MVEEnvState(next_agent_states, next_goal_states, next_obst_states)
         info = {}
 
         # the episode ends when reaching max_episode_steps
         done = jnp.array(False)
 
-        # calculate reward and cost
-        reward = self.get_reward(graph, action)
-        cost, cost_real = self.get_cost(graph, action)
         '''
         # debug
         jax.debug.print("============================= \n"

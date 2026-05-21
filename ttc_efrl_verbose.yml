@@ -2,6 +2,7 @@ name: ttc_efrl
 channels:
   - defaults
   - conda-forge
+  - nvidia
 dependencies:
   - _libgcc_mutex=0.1=main
   - _openmp_mutex=5.1=1_gnu
@@ -102,7 +103,7 @@ dependencies:
       - ipython==8.12.3
       - jax==0.4.9
       - jax-cuda11-pjrt==0.4.25
-      - jaxlib==0.4.9+cuda11.cudnn86
+      - https://storage.googleapis.com/jax-releases/cuda11/jaxlib-0.4.9+cuda11.cudnn86-cp38-cp38-manylinux2014_x86_64.whl
       - jaxtyping==0.2.19
       - jedi==0.19.2
       - jraph==0.0.6.dev0
