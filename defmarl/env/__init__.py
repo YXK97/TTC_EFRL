@@ -5,6 +5,7 @@ from defmarl.env.mve_lanechangeANDovertake import MVELaneChangeAndOverTake
 from defmarl.env.mve_normedGraph import MVENormedGraph
 from defmarl.env.mve_normedGraph_CBF import MVENormedGraph_CBF
 from defmarl.env.mve_lowspeed import MVELaneChangeAndOverTake_LowSpeed
+from defmarl.env.mve_lowspeed_CBF import MVELaneChangeAndOverTake_LowSpeed_CBF
 from defmarl.env.mve_lanechange_rsh import MVELaneChangeAndOverTake_RSH
 from defmarl.env.mve_lowspeed_bound import MVELaneChangeAndOverTake_LowSpeed_Bound
 
@@ -13,12 +14,13 @@ ENV = {
     'MVENormedGraph': MVENormedGraph,
     'MVENormedGraph_CBF': MVENormedGraph_CBF,
     'MVELaneChangeAndOverTake_LowSpeed': MVELaneChangeAndOverTake_LowSpeed,
+    'MVELaneChangeAndOverTake_LowSpeed_CBF': MVELaneChangeAndOverTake_LowSpeed_CBF,
     'MVELaneChangeAndOverTake_RSH': MVELaneChangeAndOverTake_RSH,
     'MVELaneChangeAndOverTake_LowSpeed_Bound': MVELaneChangeAndOverTake_LowSpeed_Bound,
 }
 
 
-DEFAULT_MAX_STEP = 128
+DEFAULT_MAX_STEP = 256
 
 
 def make_env(

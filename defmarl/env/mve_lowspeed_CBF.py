@@ -28,7 +28,7 @@ from defmarl.utils.scaling_lowspeed import scaling_calc, scaling_calc_bound
 INF = jnp.inf
 
 
-class MVELaneChangeAndOverTake_LowSpeed(MVE):
+class MVELaneChangeAndOverTake_LowSpeed_CBF(MVE):
     """该任务使用agent位姿和预设轨迹的偏移量、加减速度和方向盘转角的大小作为的reward的度量，
     scaling factor作为cost的度量，每个agent分配一个goal并规划出一条轨迹（五次多项式），
     环境为四车道，障碍车均沿车道作匀速直线运动"""
@@ -62,6 +62,8 @@ class MVELaneChangeAndOverTake_LowSpeed(MVE):
         "delta_filter_alpha": 0.5,   # 转角滤波系数
         "max_dv": 0.5,          # km/h
         "max_delta": 0.2,      # deg
+
+        "gamma": 3., # 用于CBF
     }
     PARAMS.update({
         "ego_radius": jnp.linalg.norm(PARAMS["ego_bb_size"]/2), # m
@@ -83,9 +85,9 @@ class MVELaneChangeAndOverTake_LowSpeed(MVE):
                  reward_max: float = 0.5,
                  params: dict = None
                  ):
-        area_size = MVELaneChangeAndOverTake_LowSpeed.PARAMS["rollout_state_range"][:4] if area_size is None else area_size
-        params = MVELaneChangeAndOverTake_LowSpeed.PARAMS if params is None else params
-        super(MVELaneChangeAndOverTake_LowSpeed, self).__init__(num_agents, area_size, max_step, max_travel, dt, reward_min, reward_max, params)
+        area_size = MVELaneChangeAndOverTake_LowSpeed_CBF.PARAMS["rollout_state_range"][:4] if area_size is None else area_size
+        params = MVELaneChangeAndOverTake_LowSpeed_CBF.PARAMS if params is None else params
+        super(MVELaneChangeAndOverTake_LowSpeed_CBF, self).__init__(num_agents, area_size, max_step, max_travel, dt, reward_min, reward_max, params)
         # assert self.params["n_obsts"] == MVELaneChangeAndOverTake.PARAMS["n_obsts"], "本环境只接受2个障碍物的设置！"
         self.all_goals = jnp.zeros((num_agents, self.num_goals, self.state_dim))  # 参考点初始化
         self.all_dsYddts = jnp.zeros((num_agents, self.num_goals, 4)) # 轨迹的y方向偏移量与偏移量导数初始化
@@ -249,7 +251,7 @@ class MVELaneChangeAndOverTake_LowSpeed(MVE):
 
         # calculate reward and cost in this graph
         reward = self.get_reward(graph, action)
-        cost, cost_real = self.get_cost(graph)
+        cost, cost_real = self.get_cost(graph, action)
 
         '''
         # debug

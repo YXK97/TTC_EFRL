@@ -147,4 +147,3 @@ def scaling_calc_bound(s: State, A: Array, b: Array) -> Array:
 
     alpha = O_in_bound * scaling
     return alpha
-
