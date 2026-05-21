@@ -345,6 +345,7 @@ class MVELaneChangeAndOverTake_LowSpeed_Bound(MVE):
         """使用射线法计算的scaling factor：α为cost的评判指标，thresh-α<0安全，>=0不安全"""
         thresh = self.params["alpha_thresh"]
         num_agents = graph.env_states.agent.shape[0]
+        num_bounds = graph.env_states.bound.shape[0]
         num_obsts = graph.env_states.obstacle.shape[0]
         # state: x y θ v δ bw bh lr
 
@@ -370,6 +371,22 @@ class MVELaneChangeAndOverTake_LowSpeed_Bound(MVE):
         a_agent_cost = -jnp.ones((num_agents,), dtype=jnp.float32) # debug
         a_agent_cost_real = -jnp.ones((num_agents,), dtype=jnp.float32) # debug
 
+        # agent 和 bound 之间的scaling factor
+        bound_states = graph.type_states(type_idx=MVE.BOUND, n_type=num_bounds)
+        bound_states_metric = bound_states / convert_vec
+        agent_idx = jnp.arange(num_agents)
+        bound_low_idx = agent_idx * 2
+        bound_high_idx = agent_idx * 2 + 1
+        agent_states_pairs = agent_states_metric[agent_idx, :]
+        bound_low_states_pairs = bound_states_metric[bound_low_idx, :]
+        bound_high_states_pairs = bound_states_metric[bound_high_idx, :]
+        alpha_bound_low_pairs = jax.vmap(scaling_calc, in_axes=(0, 0))(agent_states_pairs, bound_low_states_pairs)
+        alpha_bound_high_pairs = jax.vmap(scaling_calc, in_axes=(0, 0))(agent_states_pairs, bound_high_states_pairs)
+        a_bound_low_cost = thresh - alpha_bound_low_pairs
+        a_bound_high_cost = thresh - alpha_bound_high_pairs
+        a_bound_low_cost_real = 1 - alpha_bound_low_pairs # α*>1 表示真实安全
+        a_bound_high_cost_real = 1 - alpha_bound_high_pairs
+
         # agent 和 obst 之间的scaling factor
         if num_obsts == 0:
             a_obst_cost = -jnp.ones((num_agents,), dtype=jnp.float32)
@@ -386,6 +403,7 @@ class MVELaneChangeAndOverTake_LowSpeed_Bound(MVE):
             a_obst_cost_real = jnp.max(1-alpha_matrix, axis=1) # α*>0 表示真实安全
         # a_obst_cost = -jnp.ones((num_agents,), dtype=jnp.float32) # debug
 
+        """
         # agent 和 bound 之间的scaling factor，只对y方向有约束
         state_range = self.params["default_state_range"]
         yl = state_range[2]
@@ -401,13 +419,14 @@ class MVELaneChangeAndOverTake_LowSpeed_Bound(MVE):
         a_bound_yh_alpha = jax.vmap(scaling_calc_bound, in_axes=(0, None, None))(agent_states_metric, A_h, b_h)
         a_bound_yh_cost = thresh - a_bound_yh_alpha
         a_bound_yh_cost_real = 1 - a_bound_yh_alpha # α*>1 表示真实安全
+        """
 
         # a_bound_yl_cost = -jnp.ones((num_agents,), dtype=jnp.float32) # debug
         # a_bound_yh_cost = -jnp.ones((num_agents,), dtype=jnp.float32) # debug
 
-        cost = jnp.stack([a_agent_cost, a_obst_cost, a_bound_yl_cost, a_bound_yh_cost], axis=1)
+        cost = jnp.stack([a_agent_cost, a_obst_cost, a_bound_low_cost, a_bound_high_cost], axis=1)
         cost_real = jnp.stack([a_agent_cost_real, a_obst_cost_real,
-                               a_bound_yl_cost_real, a_bound_yh_cost_real], axis=1)
+                               a_bound_low_cost_real, a_bound_high_cost_real], axis=1)
         assert cost.shape == (num_agents, self.n_cost)
         assert cost_real.shape == (num_agents, self.n_cost)
 
