@@ -233,23 +233,23 @@ class MVELaneChangeAndOverTake_LowSpeed(MVE):
     ) -> Tuple[MVEEnvGraphsTuple, jnp.ndarray, Reward, Cost, Cost, Done, Info]:
         # get information from graph
         agent_states = graph.type_states(type_idx=MVE.AGENT, n_type=self.num_agents)
-        goal_states = graph.type_states(type_idx=MVE.GOAL, n_type=self.num_agents)  # debug
+        goal_states = graph.type_states(type_idx=MVE.GOAL, n_type=self.num_agents)
         obst_states = graph.type_states(type_idx=MVE.OBST, n_type=self.num_obsts)
-        action = self.transform_action(action)
-
-        # calculate reward and cost
-        reward = self.get_reward(graph, action)
-        cost, cost_real = self.get_cost(graph, action)
+        next_obst_states = self.obst_step_euler(obst_states)
 
         # calculate next graph
-        next_agent_states = self.agent_step_euler(agent_states, action)
-        next_goal_states = self.goal_step(next_agent_states)
-        next_obst_states = self.obst_step_euler(obst_states)
+        action = self.transform_action(action)
+        next_agent_states = self.agent_step_euler(agent_states, goal_states, action)
+        next_goal_states, next_dsYddts = self.goal_dsYddt_step(next_agent_states)
         next_env_state = MVEEnvState(next_agent_states, next_goal_states, next_obst_states)
         info = {}
 
         # the episode ends when reaching max_episode_steps
         done = jnp.array(False)
+
+        # calculate reward and cost in this graph
+        reward = self.get_reward(graph, action)
+        cost, cost_real = self.get_cost(graph)
 
         '''
         # debug
@@ -429,7 +429,7 @@ class MVELaneChangeAndOverTake_LowSpeed(MVE):
             a_obst_cost = jnp.max(cost_matrix, axis=1)
             a_obst_cost_real = jnp.max(cost_real_matrix, axis=1)
         # a_obst_cost = -jnp.ones((num_agents,), dtype=jnp.float32) # debug
-        
+
 
         # agent 和 bound 之间的scaling factor，只对y方向有约束
         state_range = self.params["default_state_range"]
@@ -789,7 +789,7 @@ class MVELaneChangeAndOverTake_LowSpeed(MVE):
     def get_graph(self, env_state: MVEEnvState, obst_as_agent:bool = False) -> MVEEnvGraphsTuple:
         num_agents = env_state.agent.shape[0]
         num_goals = env_state.goal.shape[0]
-        num_obsts = env_state.obstacle.shape[0] # TODO: 为0时报错，但理论上可以为0
+        num_obsts = env_state.obstacle.shape[0]
         assert num_agents > 0 and num_goals > 0, "至少需要设定agent和goal!"
         assert num_agents == num_goals, "每一个agent对应一个goal"
         # node features
