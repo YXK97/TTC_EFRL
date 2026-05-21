@@ -50,10 +50,7 @@ class MVELaneChangeAndOverTake_LowSpeed_Bound(MVE):
 
         # [x_l, x_h, y_l, y_h, θ_l, θ_h, v_l, v_h, δ_l, δ_h, bw_l, bw_h, bh_l, bh_h, lr_l, lr_h]
         # 单位：x,y,bw,bh,lr: m  v: km/h,  θ: °
-        "rollout_state_range": jnp.array([-5., 150., -10., 10., -180., 180., 0., 30., -10., 10., 0., INF, 0., INF, 0., INF]),
-        # "rollout_state_b_range": jnp.array([-INF, INF, -INF, INF, -180., 180., 30., 100., 0., INF, 0., INF, 0., INF]),
-        "agent_init_state_range": jnp.array([-100., -50., -3., 3., -180., 180., -INF, INF, 0., INF, 0., INF, 0., INF]),
-        "terminal_state_range": jnp.array([50., 100., -3., 3., -180., 180., -INF, INF, 0., INF, 0., INF, 0., INF]),
+        # "rollout_state_range": jnp.array([-5., 150., -4., 4., -180., 180., 0., 30., -10., 10., 0., INF, 0., INF, 0., INF]),
         "default_state_range": jnp.array([0., 100., -3., 3., -180., 180., -INF, INF, 0., INF, 0., INF, 0., INF]),
 
         "lane_width": 3, # 车道宽度，m
@@ -65,14 +62,15 @@ class MVELaneChangeAndOverTake_LowSpeed_Bound(MVE):
         "max_delta": 0.2,      # deg
     }
     PARAMS.update({
+        "rollout_state_range": jnp.array([-5., 150., PARAMS["default_state_range"][2] - PARAMS["bound_bb_size"][1],
+                                          PARAMS["default_state_range"][3] + PARAMS["bound_bb_size"][1],
+                                          -180., 180., 0., 30., -10., 10., 0., INF, 0., INF, 0., INF]),
         "ego_radius": jnp.linalg.norm(PARAMS["ego_bb_size"]/2), # m
         "ego_L": PARAMS["ego_lf"]+PARAMS["ego_lr"], # m
         "lane_centers": process_lane_centers(PARAMS["default_state_range"][2:4], PARAMS["lane_width"]), # 车道中心线y坐标 m
     })
     if "obst_bb_size" in PARAMS and PARAMS["obst_bb_size"].shape == (2,):
         PARAMS.update({"obst_radius": jnp.linalg.norm(PARAMS["obst_bb_size"]/2)})
-    # PARAMS.update({"n_obsts": PARAMS["lane_centers"].shape[0]}) # 本环境每根车道一辆障碍车
-    assert PARAMS["terminal_state_range"][0] - PARAMS["agent_init_state_range"][1] >= 100
 
     def __init__(self,
                  num_agents: int,
@@ -154,16 +152,14 @@ class MVELaneChangeAndOverTake_LowSpeed_Bound(MVE):
         # 车道 y 方向边界
         y_low = self.params["default_state_range"][2]
         y_high = self.params["default_state_range"][3]
-
         # bound 矩形
         bound_bb_size = jnp.asarray(bound_bb_size)
         bound_bw = bound_bb_size[0]
         bound_bh = bound_bb_size[1]
 
         x = agent_states[:, 0]
-        # TODO:改为更加通用的，1/2 * （bound_height）
-        y_lower_bound = jnp.ones((num_agents,)) * (y_low - 1.0)
-        y_upper_bound = jnp.ones((num_agents,)) * (y_high + 1.0)
+        y_lower_bound = jnp.ones((num_agents,)) * (y_low - 1/2 * bound_bh)
+        y_upper_bound = jnp.ones((num_agents,)) * (y_high + 1/2 * bound_bh)
 
         theta = jnp.zeros((num_agents,))
         v = jnp.zeros((num_agents,))
@@ -287,7 +283,7 @@ class MVELaneChangeAndOverTake_LowSpeed_Bound(MVE):
         next_agent_states = self.agent_step_euler(agent_states, goal_states, action)
         next_bounds_states = self.generate_bound(next_agent_states, bound_bb_size = self.params['bound_bb_size'])
         next_goal_states, next_dsYddts = self.goal_dsYddt_step(next_agent_states)
-        next_env_state = MVEEnvBoundState(next_agent_states, next_goal_states, next_bounds_states, next_obst_states) #TODO:添加输入bound
+        next_env_state = MVEEnvBoundState(next_agent_states, next_goal_states, next_bounds_states, next_obst_states)
         info = {}
 
         # the episode ends when reaching max_episode_steps
@@ -718,7 +714,6 @@ class MVELaneChangeAndOverTake_LowSpeed_Bound(MVE):
             agent_goal_edges.append(EdgeBlock(rel_state[None, None, :], jnp.ones((1, 1)),
                                               jnp.array([i_agent]), jnp.array([i_agent + self.num_agents])))
 
-        # TODO:添加agent和bounds的连接
         # agent - bound connection
         agent_bound_edges = []
         assert num_bounds == num_agents * 2
@@ -808,7 +803,7 @@ class MVELaneChangeAndOverTake_LowSpeed_Bound(MVE):
         else:
             node_feats = node_feats.at[:num_agents, 5:7].set(self.params["ego_bb_size"])
             node_feats = node_feats.at[:num_agents, 7].set(self.params["ego_lr"])
-        node_feats = node_feats.at[num_agents + num_goals: num_agents + num_goals + num_bounds, 5:7].set(self.params["bound_bb_size"])# TODO
+        node_feats = node_feats.at[num_agents + num_goals: num_agents + num_goals + num_bounds, 5:7].set(self.params["bound_bb_size"])
         if num_obsts > 0:
             node_feats = node_feats.at[num_agents + num_goals + num_bounds:, 5:7].set(self.params["obst_bb_size"])
             node_feats = node_feats.at[num_agents + num_goals + num_bounds:, 7].set(self.params["obst_lr"])
