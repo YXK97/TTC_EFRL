@@ -340,7 +340,7 @@ class MVELaneChangeAndOverTake_LowSpeed_CBF(MVE):
             # 这里h>0才表示安全，故h=alpha-thresh
             Lfh = jnp.dot(grad_p, fc)
             Lgh = jnp.dot(grad_p, gc)
-            cost = -(Lfh + Lgh*delta + gamma*(alpha - thresh))
+            cost = -(Lfh + Lgh*delta + gamma*(alpha - thresh)) / gamma
 
             # 真实安全判断条件：h <= 0
             # 这里h=1-alpha
@@ -376,7 +376,7 @@ class MVELaneChangeAndOverTake_LowSpeed_CBF(MVE):
             # 这里h>0才表示安全，故h=alpha-thresh
             Lfh = jnp.dot(grad_p, fc)
             Lgh = jnp.dot(grad_p, gc)
-            cost = -(Lfh + Lgh * delta + gamma * (alpha - thresh))
+            cost = -(Lfh + Lgh * delta + gamma * (alpha - thresh)) / gamma
 
             # 真实安全判断条件：h <= 0
             # 这里h=1-alpha
@@ -480,7 +480,7 @@ class MVELaneChangeAndOverTake_LowSpeed_CBF(MVE):
         # add margin and clip
         eps = 1.
         cost = jnp.where(cost <= 0.0, cost, cost + eps)
-        cost = jnp.clip(cost, a_min=-3.0)
+        cost = jnp.clip(cost, a_min=-3.0, a_max=10.0)
 
         return cost, cost_real
 
