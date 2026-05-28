@@ -337,10 +337,16 @@ class MVELaneChangeAndOverTake(MVE):
         a_goal_v_b_x_kmph = jnp.einsum('aij, ai -> aj', a22_Q_goal, a2_goal_v_kmph)[:, 0]
         a_agent_v_b_x_kmph = jnp.einsum('aij, ai -> aj', a22_Q_agent, a2_agent_v_kmph)[:, 0]
 
-        # 待比较的state
-        a4_goals = jnp.concatenate([a2_goal_pos_m, a_goal_v_b_x_kmph[:, None], a_goal_theta_deg[:, None]], axis=1)
-        a4_agents = jnp.concatenate([a2_agent_pos_m, a_agent_v_b_x_kmph[:, None], a_agent_theta_deg[:, None]], axis=1)
-        a4_e = a4_agents - a4_goals
+        # 除了theta外，待比较的state
+        a3_goals = jnp.concatenate([a2_goal_pos_m, a_goal_v_b_x_kmph[:, None]], axis=1)
+        a3_agents = jnp.concatenate([a2_agent_pos_m, a_agent_v_b_x_kmph[:, None]], axis=1)
+        a3_e = a3_agents - a3_goals
+
+        # theta_e需要转换为[-180°，180°]的范围内
+        a_theta_e_raw = a_agent_theta_deg - a_goal_theta_deg
+        a_theta_e = (a_theta_e_raw + 180.0) % 360.0 - 180.0
+
+        a4_e = jnp.concatenate([a3_e, a_theta_e[:, None]], axis=1)
 
         # 权重矩阵
         W = jnp.diag(jnp.array([1e-4, 1e-4, 2.5e-7, 1e-8]))

@@ -147,19 +147,23 @@ def generate_turn_path_points(num_agents: int,
     arc_start_xy = _road_point(start_road_idx, -TURN_HALF, lane_offset)
     arc_xy = arc_start_xy[None, :] + arc_delta
 
-    # 左转/右转后的终止道路编号。
-    # 这里道路编号按“南、东、北、西”逆时针排列，因此左转是 road_idx - 1，右转是 road_idx + 1。
-    terminal_road_idx = (start_road_idx - turn_sign.astype(jnp.int32)) % 4
+    # 驶离段不能直接用 terminal_road_idx 对应的 ROAD_DIRS。
+    # ROAD_DIRS 描述的是各道路驶向路口的方向；而转弯完成后车辆是沿新的航向驶离路口。
     terminal_longitudinal = TURN_HALF + exit_s
-    exit_xy = _road_point(terminal_road_idx, terminal_longitudinal, lane_offset)
 
     in_approach = s_path < arc_start
     in_arc = (s_path >= arc_start) & (s_path < exit_start)
-    xs = jnp.where(in_approach, approach_xy[:, 0], jnp.where(in_arc, arc_xy[:, 0], exit_xy[:, 0]))
-    ys = jnp.where(in_approach, approach_xy[:, 1], jnp.where(in_arc, arc_xy[:, 1], exit_xy[:, 1]))
 
     terminal_theta_deg = theta0_deg + turn_sign * 90.0
     terminal_theta_deg = (terminal_theta_deg + 180.0) % 360.0 - 180.0
+    terminal_theta_rad = terminal_theta_deg * jnp.pi / 180.0
+    terminal_dir = jnp.stack([jnp.cos(terminal_theta_rad), jnp.sin(terminal_theta_rad)])
+    terminal_normal = _right_normal(terminal_dir)
+    exit_xy = terminal_longitudinal[:, None] * terminal_dir + lane_offset * terminal_normal
+
+    xs = jnp.where(in_approach, approach_xy[:, 0], jnp.where(in_arc, arc_xy[:, 0], exit_xy[:, 0]))
+    ys = jnp.where(in_approach, approach_xy[:, 1], jnp.where(in_arc, arc_xy[:, 1], exit_xy[:, 1]))
+
     theta_deg = jnp.where(
         in_approach,
         theta0_deg,
