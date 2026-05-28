@@ -11,7 +11,8 @@ from .designed_scene_gen_intersection import gen_scene_randomly, gen_handmade_sc
 from defmarl.utils.graph import GraphsTuple
 from defmarl.utils.typing import Array, AgentState, ObstState, Cost
 from defmarl.utils.utils import find_closest_goal_indices
-from ..utils.scaling import scaling_calc, scaling_calc_bound
+from ..utils.scaling import scaling_calc
+from ..utils.scaling_intersection import scaling_calc_intersection_bounds
 
 
 INF = jnp.inf
@@ -48,7 +49,7 @@ class MVEIntersection(MVELaneChangeAndOverTake):
         ]),
         "lane_width": 3.,
         "intersection_radius": 14.5,
-        "alpha_thresh": 1.4,
+        "alpha_thresh": 1.05,
     })
     PARAMS.update({
         "lane_centers": jnp.array([-3., 0., 3.], dtype=jnp.float32),
@@ -73,16 +74,13 @@ class MVEIntersection(MVELaneChangeAndOverTake):
         return (
             "agent collisions",
             "obs collisions",
-            "bound exceeds x low",
-            "bound exceeds x high",
-            "bound exceeds y low",
-            "bound exceeds y high",
+            "bound collisions",
         )
 
     @override
     @property
     def n_cost(self) -> int:
-        return 6
+        return 3
 
     @override
     def reset(self, key: Array) -> Tuple[GraphsTuple, jnp.ndarray]:
@@ -119,9 +117,9 @@ class MVEIntersection(MVELaneChangeAndOverTake):
         o_obst_states_new = o_obst_states_new.at[:, 1].set(o_y + o_vy / 3.6 * self.dt)
         return o_obst_states_new
 
-    def _bound_cost(self, agent_states: AgentState, A: Array, b: Array) -> Tuple[Array, Array]:
+    def _bound_cost(self, agent_states: AgentState) -> Tuple[Array, Array]:
         thresh = self.params["alpha_thresh"]
-        alpha = jax.vmap(scaling_calc_bound, in_axes=(0, None, None))(agent_states, A, b)
+        alpha = jax.vmap(scaling_calc_intersection_bounds)(agent_states)
         return thresh - alpha, 1.0 - alpha
 
     @override
@@ -151,28 +149,17 @@ class MVEIntersection(MVELaneChangeAndOverTake):
             a_obst_cost = jnp.max(thresh - alpha_matrix, axis=1)
             a_obst_cost_real = jnp.max(1.0 - alpha_matrix, axis=1)
 
-        state_range = self.params["default_state_range"]
-        xl, xh, yl, yh = state_range[0], state_range[1], state_range[2], state_range[3]
-        a_bound_xl_cost, a_bound_xl_cost_real = self._bound_cost(agent_states, jnp.array([[1., 0.]]), jnp.array([xl]))
-        a_bound_xh_cost, a_bound_xh_cost_real = self._bound_cost(agent_states, jnp.array([[-1., 0.]]), jnp.array([-xh]))
-        a_bound_yl_cost, a_bound_yl_cost_real = self._bound_cost(agent_states, jnp.array([[0., 1.]]), jnp.array([yl]))
-        a_bound_yh_cost, a_bound_yh_cost_real = self._bound_cost(agent_states, jnp.array([[0., -1.]]), jnp.array([-yh]))
+        a_bound_cost, a_bound_cost_real = self._bound_cost(agent_states)
 
         cost = jnp.stack([
             a_agent_cost,
             a_obst_cost,
-            a_bound_xl_cost,
-            a_bound_xh_cost,
-            a_bound_yl_cost,
-            a_bound_yh_cost,
+            a_bound_cost,
         ], axis=1)
         cost_real = jnp.stack([
             a_agent_cost_real,
             a_obst_cost_real,
-            a_bound_xl_cost_real,
-            a_bound_xh_cost_real,
-            a_bound_yl_cost_real,
-            a_bound_yh_cost_real,
+            a_bound_cost_real,
         ], axis=1)
         assert cost.shape == (num_agents, self.n_cost)
         assert cost_real.shape == (num_agents, self.n_cost)
