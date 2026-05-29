@@ -9,7 +9,7 @@ from defmarl.utils.typing import PRNGKey, AgentState, ObstState, Array, PathRefs
 
 
 ROAD_HALF = 100.0
-TURN_HALF = 14.5
+TURN_HALF = 17.5
 POINT_INTERVAL = 0.1
 LANE_CENTERS = jnp.array([-3.0, 0.0, 3.0], dtype=jnp.float32)
 
@@ -50,6 +50,11 @@ def _state_xy_speed_theta(xy: Array, speed_kmph: Array, theta_deg: Array,
         jnp.array(0.0, dtype=jnp.float32),
         jnp.array(0.0, dtype=jnp.float32),
     ])
+
+
+def _other_lane_idx(lane_idx: Array, choose_key: PRNGKey) -> Array:
+    """从三车道中选择一个不同于 forbidden lane 的车道。"""
+    return (lane_idx + 1 + jr.randint(choose_key, shape=(), minval=0, maxval=2)) % 3
 
 
 def _road_point(road_idx: Array, longitudinal: Array, lane_offset: Array) -> Array:
@@ -131,7 +136,7 @@ def generate_turn_path_points(num_agents: int,
     arc_s = jnp.clip(s_path - arc_start, 0.0, arc_len)
     exit_s = jnp.clip(s_path - exit_start, 0.0, exit_len)
 
-    # 起始道路：从区域边界 -100m 沿道路前进到转向区边界 -14.5m。
+    # 起始道路：从区域边界 -100m 沿道路前进到转向区边界 -TURN_HALF。
     start_longitudinal = -ROAD_HALF + approach_s
     approach_xy = _road_point(start_road_idx, start_longitudinal, lane_offset)
 
@@ -306,12 +311,13 @@ class IntersectionTurnScene(IntersectionSceneBase):
 
         # 垂直动态障碍物：三条车道任意选一条。
         random_lane_idx = jr.randint(lane_key, shape=(), minval=0, maxval=3)
-        # 平行动动态障碍物：只允许选 agent 初始车道以外的两条车道。
-        # lane_idx 是 agent 初始车道，randint(0, 2) 只会生成 0 或 1；
-        # 因此 other_lane_idx 只可能是 lane_idx + 1 或 lane_idx + 2，再对 3 取模，
-        # 结果一定不等于 lane_idx。
-        # 举例：agent 在 0 号车道，则障碍车只能在 1 或 2 号车道。
-        other_lane_idx = (lane_idx + 1 + jr.randint(lane_key, shape=(), minval=0, maxval=2)) % 3
+        # 平行动动态障碍物：
+        # 1. 与 agent 同向时，不能选择 agent 初始车道。
+        # 2. 与 agent 反向时，不能选择与 agent 初始车道物理位置相对的车道。
+        #    三车道索引为 0/1/2，反向道路中与 lane_idx 对应同一条物理车道的是 2-lane_idx。
+        same_direction = obst_road_idx == start_road_idx
+        forbidden_parallel_lane_idx = jnp.where(same_direction, lane_idx, 2 - lane_idx)
+        other_lane_idx = _other_lane_idx(forbidden_parallel_lane_idx, lane_key)
         obst_lane_idx = jnp.where(mode == 0, random_lane_idx, other_lane_idx)
         obst_lane_offset = LANE_CENTERS[obst_lane_idx]
 
@@ -325,14 +331,16 @@ class IntersectionTurnScene(IntersectionSceneBase):
         avg_speed_mps = ((agent_speed + 35.0) * 0.5) / 3.6
         t_to_turn = dist_to_turn / jnp.maximum(avg_speed_mps, 0.1)
 
-        # 垂直模式的冲突点取障碍车道路穿过路口中心附近的位置；
-        # 平行模式的冲突点取 agent 起始道路进入转向区的位置。
+        # 垂直模式的冲突点取障碍车道路穿过路口中心附近的位置。
+        # 平行模式取动态障碍车自己道路、自己车道的转向区入口；
+        # 这样车道选择会真实反映到障碍车轨迹上，而不是被 agent 初始车道覆盖。
         conflict_xy = jnp.where(
             mode == 0,
             _road_point(obst_road_idx, 0.0, obst_lane_offset),
-            _road_point(start_road_idx, -TURN_HALF, lane_offset),
+            _road_point(obst_road_idx, -TURN_HALF, obst_lane_offset),
         )
-        longitudinal_jitter = jr.uniform(jitter_key, shape=(), dtype=jnp.float32, minval=-10.0, maxval=10.0)
+        # 加大纵向扰动，使动态障碍车既可能提前到达，也可能滞后到达，甚至已经驶过冲突点。
+        longitudinal_jitter = jr.uniform(jitter_key, shape=(), dtype=jnp.float32, minval=-80.0, maxval=80.0)
         xy = conflict_xy - direction * (speed / 3.6 * t_to_turn + longitudinal_jitter)
         return _state_xy_speed_theta(xy, speed, theta_deg)
 
@@ -367,18 +375,12 @@ class IntersectionTurnScene(IntersectionSceneBase):
             agent_r_key, shape=(self.num_agents,), dtype=jnp.float32,
             minval=-ROAD_HALF, maxval=gen_zone_high,
         )
-        a_agent_lat = jr.uniform(
-            agent_lat_key, shape=(self.num_agents,), dtype=jnp.float32,
-            minval=-0.5, maxval=0.5,
-        )
+        a_agent_lat = jnp.zeros((self.num_agents,), dtype=jnp.float32)
         a_agent_speed = jr.uniform(
             agent_speed_key, shape=(self.num_agents,), dtype=jnp.float32,
             minval=60.0, maxval=90.0,
         )
-        a_agent_theta = ROAD_THETAS_DEG[start_road_idx] + jr.uniform(
-            agent_theta_key, shape=(self.num_agents,), dtype=jnp.float32,
-            minval=-5.0, maxval=5.0,
-        )
+        a_agent_theta = jnp.repeat(ROAD_THETAS_DEG[start_road_idx][None], self.num_agents, axis=0)
         start_dir = ROAD_DIRS[start_road_idx]
         start_normal = _right_normal(start_dir)
         a2_agent_xy = start_dir[None, :] * a_agent_r[:, None] + start_normal[None, :] * (
@@ -391,10 +393,12 @@ class IntersectionTurnScene(IntersectionSceneBase):
             a_agent_theta, a_zeros, a_zeros, a_zeros,
         ], axis=1)
 
-        # 静态障碍车从参考路径后段随机取一点放置，避开 agent 生成区。
-        # 速度设为 0，朝向沿参考点方向再加少量扰动。
-        sobst_min_idx = min(900, max(0, self.num_ref_points // 4))
-        sobst_idx = jr.randint(sobst_idx_key, shape=(), minval=sobst_min_idx, maxval=self.num_ref_points - 1)
+        # 静态障碍车集中放在转向区域附近，而不是参考路径远端。
+        # s≈ROAD_HALF 时处于路口中心附近，这里向前后各取一段范围。
+        sobst_min_idx = min(max(0, int((ROAD_HALF - TURN_HALF - 10.0) / POINT_INTERVAL)), self.num_ref_points - 2)
+        sobst_max_idx = min(max(sobst_min_idx + 1, int((ROAD_HALF + TURN_HALF + 20.0) / POINT_INTERVAL)),
+                            self.num_ref_points - 1)
+        sobst_idx = jr.randint(sobst_idx_key, shape=(), minval=sobst_min_idx, maxval=sobst_max_idx)
         S_sobst_ref = anS_goals[0, sobst_idx, :]
         sobst_offset = jr.uniform(sobst_pos_key, shape=(2,), dtype=jnp.float32, minval=-1.0, maxval=1.0)
         sobst_theta = S_sobst_ref[4] + jr.uniform(
@@ -518,7 +522,8 @@ class IntersectionStraightPerpendicularDynamicScene(IntersectionSceneBase):
         # 例如 agent 从南路直行时，agent_normal * lane_offset 决定 x，
         # obstacle_normal * obst_lane_offset 决定 y，两者相加得到两条车道中心线的交点。
         conflict_xy = agent_normal * lane_offset + obst_normal * obst_lane_offset
-        longitudinal_jitter = jr.uniform(jitter_key, shape=(), dtype=jnp.float32, minval=-10.0, maxval=10.0)
+        # 加大纵向扰动，使动态障碍车覆盖提前、滞后和无明显干扰的情况。
+        longitudinal_jitter = jr.uniform(jitter_key, shape=(), dtype=jnp.float32, minval=-80.0, maxval=80.0)
         xy = conflict_xy - obst_direction * (speed / 3.6 * t_to_turn + longitudinal_jitter)
         return _state_xy_speed_theta(xy, speed, theta_deg)
 
@@ -551,18 +556,12 @@ class IntersectionStraightPerpendicularDynamicScene(IntersectionSceneBase):
             agent_r_key, shape=(self.num_agents,), dtype=jnp.float32,
             minval=-ROAD_HALF, maxval=gen_zone_high,
         )
-        a_agent_lat = jr.uniform(
-            agent_lat_key, shape=(self.num_agents,), dtype=jnp.float32,
-            minval=-0.5, maxval=0.5,
-        )
+        a_agent_lat = jnp.zeros((self.num_agents,), dtype=jnp.float32)
         a_agent_speed = jr.uniform(
             agent_speed_key, shape=(self.num_agents,), dtype=jnp.float32,
             minval=60.0, maxval=90.0,
         )
-        a_agent_theta = ROAD_THETAS_DEG[start_road_idx] + jr.uniform(
-            agent_theta_key, shape=(self.num_agents,), dtype=jnp.float32,
-            minval=-5.0, maxval=5.0,
-        )
+        a_agent_theta = jnp.repeat(ROAD_THETAS_DEG[start_road_idx][None], self.num_agents, axis=0)
         start_dir = ROAD_DIRS[start_road_idx]
         start_normal = _right_normal(start_dir)
         a2_agent_xy = start_dir[None, :] * a_agent_r[:, None] + start_normal[None, :] * (
@@ -575,13 +574,16 @@ class IntersectionStraightPerpendicularDynamicScene(IntersectionSceneBase):
             a_agent_theta, a_zeros, a_zeros, a_zeros,
         ], axis=1)
 
-        # 静态障碍车从参考路径上随机选点放置，但避开 agent 生成区。
-        # 最大生成区长度对应 decel_len=40m，因此从该位置之后取点可以保证不落在生成区内。
+        # 静态障碍车从参考路径上随机选点放置，更多集中在路口中心区域附近。
         sobst_min_idx = min(
-            max(0, int((ROAD_HALF - TURN_HALF - 40.0) / POINT_INTERVAL) + 1),
+            max(0, int((ROAD_HALF - TURN_HALF - 10.0) / POINT_INTERVAL)),
+            self.num_ref_points - 2,
+        )
+        sobst_max_idx = min(
+            max(sobst_min_idx + 1, int((ROAD_HALF + TURN_HALF + 10.0) / POINT_INTERVAL)),
             self.num_ref_points - 1,
         )
-        sobst_idx = jr.randint(sobst_idx_key, shape=(), minval=sobst_min_idx, maxval=self.num_ref_points)
+        sobst_idx = jr.randint(sobst_idx_key, shape=(), minval=sobst_min_idx, maxval=sobst_max_idx)
         S_sobst_ref = anS_goals[0, sobst_idx, :]
         sobst_offset = jr.uniform(sobst_pos_key, shape=(2,), dtype=jnp.float32, minval=-1.0, maxval=1.0)
         sobst_theta = S_sobst_ref[4] + jr.uniform(

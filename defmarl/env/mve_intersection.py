@@ -56,8 +56,8 @@ class MVEIntersection(MVELaneChangeAndOverTake):
             -INF, INF, -INF, INF,
         ]),
         "lane_width": 3.,
-        "intersection_radius": 14.5,
-        "alpha_thresh": 1.05,
+        "intersection_radius": 17.5,
+        "alpha_thresh": 1.0,
     })
     PARAMS.update({
         "lane_centers": jnp.array([-3., 0., 3.], dtype=jnp.float32),
@@ -136,6 +136,11 @@ class MVEIntersection(MVELaneChangeAndOverTake):
         num_agents = graph.env_states.agent.shape[0]
         num_obsts = graph.env_states.obstacle.shape[0]
         agent_states = graph.type_states(type_idx=self.AGENT, n_type=num_agents)
+        # state: x y vx vy theta dthetadt bw bh
+        convert_vec_s = jnp.array([1, 1, 3.6, 3.6, 180/jnp.pi, 180/jnp.pi, 1, 1], dtype=jnp.float32)
+        # scaling 系列函数内部使用弧度计算旋转矩阵，而环境 state 中 theta/dtheta 的单位是 degree。
+        # 如果不转换，东/南/北方向车辆的包围盒姿态会被算歪，靠外侧车道初始时也可能误判为接近 bound。
+        agent_states_metric = agent_states / convert_vec_s
 
         if num_agents == 1:
             a_agent_cost = -jnp.ones((num_agents,), dtype=jnp.float32)
@@ -149,15 +154,16 @@ class MVEIntersection(MVELaneChangeAndOverTake):
             a_obst_cost_real = -jnp.ones((num_agents,), dtype=jnp.float32)
         else:
             obstacle_states = graph.type_states(type_idx=self.OBST, n_type=num_obsts)
+            obstacle_states_metric = obstacle_states / convert_vec_s
             i_grid, j_grid = jnp.meshgrid(jnp.arange(num_agents), jnp.arange(num_obsts), indexing="ij")
-            state_i_pairs = agent_states[i_grid.flatten(), :]
-            state_j_pairs = obstacle_states[j_grid.flatten(), :]
+            state_i_pairs = agent_states_metric[i_grid.flatten(), :]
+            state_j_pairs = obstacle_states_metric[j_grid.flatten(), :]
             alpha_pairs = jax.vmap(scaling_calc, in_axes=(0, 0))(state_i_pairs, state_j_pairs)
             alpha_matrix = alpha_pairs.reshape((num_agents, num_obsts))
             a_obst_cost = jnp.max(thresh - alpha_matrix, axis=1)
             a_obst_cost_real = jnp.max(1.0 - alpha_matrix, axis=1)
 
-        a_bound_cost, a_bound_cost_real = self._bound_cost(agent_states)
+        a_bound_cost, a_bound_cost_real = self._bound_cost(agent_states_metric)
 
         cost = jnp.stack([
             a_agent_cost,
