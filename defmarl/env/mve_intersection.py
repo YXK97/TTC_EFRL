@@ -45,13 +45,13 @@ class MVEIntersection(MVELaneChangeAndOverTake):
         ]),
         "rollout_state_range": jnp.array([
             -110., 110., -110., 110.,
-            -INF, INF, -INF, INF,
-            -180., 180., -INF, INF,
+            -150., 150., -150., 150.,
+            -180., 180., -360., 360.,
             -INF, INF, -INF, INF,
         ]),
         "rollout_state_b_range": jnp.array([
             -INF, INF, -INF, INF,
-            5., 100., -INF, INF,
+            30., 100., -INF, INF,
             -INF, INF, -INF, INF,
             -INF, INF, -INF, INF,
         ]),
