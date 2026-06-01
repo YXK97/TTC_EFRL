@@ -115,6 +115,11 @@ def train(args):
         clip_eps=args.clip_eps,
         lagr_init=args.lagr_init,
         lr_lagr=args.lr_lagr,
+        tau=args.tau,
+        replay_size=args.replay_size,
+        expl_noise=args.expl_noise,
+        replay_warmup_transitions=args.replay_warmup_transitions,
+        updates_per_iter=args.updates_per_iter,
         iter_index=from_iter,
     )
 
@@ -215,6 +220,11 @@ def main():
     parser.add_argument('--clip-eps', type=float, default=0.25)
     parser.add_argument("--gamma", type=float, default=0.99)
     parser.add_argument("--max-grad-norm", type=float, default=2.)
+    parser.add_argument("--tau", type=float, default=0.005)
+    parser.add_argument("--replay-size", type=int, default=250000)
+    parser.add_argument("--expl-noise", type=float, default=0.15)
+    parser.add_argument("--replay-warmup-transitions", type=int, default=8192)
+    parser.add_argument("--updates-per-iter", type=int, default=1)
 
     # environment arguments
     parser.add_argument("--reward-min", type=float, default=-20.)
