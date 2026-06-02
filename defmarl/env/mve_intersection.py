@@ -57,7 +57,7 @@ class MVEIntersection(MVELaneChangeAndOverTake):
         ]),
         "lane_width": 3.,
         "intersection_radius": 17.5,
-        "alpha_thresh": 1.0,
+        "alpha_thresh": 1.05,
     })
     PARAMS.update({
         "lane_centers": jnp.array([-3., 0., 3.], dtype=jnp.float32),

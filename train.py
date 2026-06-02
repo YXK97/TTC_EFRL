@@ -121,6 +121,7 @@ def train(args):
         replay_warmup_transitions=args.replay_warmup_transitions,
         updates_per_iter=args.updates_per_iter,
         iter_index=from_iter,
+        epoch_ppo=args.epoch_ppo
     )
 
     if model_path is not None:
@@ -225,6 +226,7 @@ def main():
     parser.add_argument("--expl-noise", type=float, default=0.15)
     parser.add_argument("--replay-warmup-transitions", type=int, default=8192)
     parser.add_argument("--updates-per-iter", type=int, default=1)
+    parser.add_argument("--epoch_ppo", type=int, default=4)
 
     # environment arguments
     parser.add_argument("--reward-min", type=float, default=-20.)

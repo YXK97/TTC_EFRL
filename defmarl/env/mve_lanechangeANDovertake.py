@@ -342,6 +342,7 @@ class MVELaneChangeAndOverTake(MVE):
         a3_agents = jnp.concatenate([a2_agent_pos_m, a_agent_v_b_x_kmph[:, None]], axis=1)
         a3_e = a3_agents - a3_goals
 
+        """
         # theta_e需要转换为[-180°，180°]的范围内
         a_theta_e_raw = a_agent_theta_deg - a_goal_theta_deg
         a_theta_e = (a_theta_e_raw + 180.0) % 360.0 - 180.0
@@ -352,6 +353,12 @@ class MVELaneChangeAndOverTake(MVE):
         W = jnp.diag(jnp.array([1e-4, 1e-4, 2.5e-7, 1e-8]))
 
         reward = -jnp.sqrt(jnp.einsum('ai, ij, ja -> a', a4_e, W, a4_e.transpose())).mean()
+        """
+
+        # 权重矩阵
+        W = jnp.diag(jnp.array([1e-4, 1e-4, 2.5e-7]))
+
+        reward = -jnp.sqrt(jnp.einsum('ai, ij, ja -> a', a3_e, W, a3_e.transpose())).mean()
 
         # 动作惩罚
         reward -= (ad_action[:, 0]**2).mean() * 0.00005

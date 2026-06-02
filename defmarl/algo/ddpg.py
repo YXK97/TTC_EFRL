@@ -14,7 +14,6 @@ from flax.training.train_state import TrainState
 
 from .base import Algorithm
 from .module.ef_wrapper import ZEncoder
-from .module.root_finder import RootFinder
 from .utils import val_to_optax_schedule
 from ..env.base import MultiAgentEnv
 from ..nn.gnn import GraphTransformerGNN
@@ -25,11 +24,16 @@ from ..trainer.utils import rollout as rollout_fn
 from ..trainer.utils import has_any_nan_or_inf, compute_norm_and_clip
 from ..utils.graph import GraphsTuple
 from ..utils.typing import Action, Array, Params, PRNGKey
-from ..utils.utils import jax_vmap
 
 
 class DeterministicActor(nn.Module):
-    """确定性 actor，输出归一化 action，范围为 [-1, 1]。"""
+    """确定性 actor。
+
+    DDPG 不学习随机策略 pi(a|s)，而是直接学习确定性策略：
+        a = mu_theta(s, z)
+    这里输出的是归一化 action，范围为 [-1, 1]；环境 step 中会通过 transform_action
+    映射到真实控制量范围。
+    """
 
     action_dim: int
     n_agents: int
@@ -54,6 +58,14 @@ class GraphQNet(nn.Module):
 
     每个 agent 的 Q_i 都可以看到局部 graph embedding、全局 graph embedding 和所有 agent action 的均值。
     这样比只看自身 action 更稳定，也不需要修改环境 graph 结构。
+
+    EFRL 模式下：
+        n_out=1      时表示 Ql(s, a, z)，即累计损失 critic；
+        n_out=n_cost 时表示 Qh(s, a, z)，即安全约束 critic。
+
+    Lagrangian 模式下：
+        n_out=1      时表示 Qr(s, a)，即累计 reward critic；
+        n_out=n_cost 时表示 Qc(s, a)，即累计 cost critic。
     """
 
     n_agents: int
@@ -139,12 +151,22 @@ class _TransitionReplay:
 
 
 class DDPG(Algorithm):
-    """Deep Deterministic Policy Gradient with EFRL/Lagrangian safety variants.
+    """普通 DDPG，使用固定权重的 reward-cost 目标。
 
-    safety_mode:
-    - "efrl": 使用 loss Ql 和 safety Qh，actor 最小化 max(Qh, Ql - z)，对应 DefMARL 的 EFRL 思路。
-    - "lagr": 使用 reward Q、cost Q 和 Lagrange multiplier，actor 最大化 Qr - lambda * Qc。
+    actor 是确定性策略：
+        a = mu_theta(s)
+
+    critic 分别学习 reward return 和 cost return：
+        Qr(s, a), Qc(s, a)
+
+    actor 最大化固定权重目标：
+        Qr(s, mu(s)) - cost_weight * Qc(s, mu(s))
+
+    代码中等价最小化：
+        L_actor = mean(-Qr + cost_weight * Qc)
     """
+
+    use_ef: bool = False
 
     def __init__(
             self,
@@ -178,16 +200,11 @@ class DDPG(Algorithm):
             expl_noise: float = 0.15,
             replay_warmup_transitions: int = 8192,
             updates_per_iter: int = 1,
-            safety_mode: str = "efrl",
-            lagr_init: float = 0.78,
-            lr_lagr: float = 1e-7,
             iter_index: int = 0,
             **kwargs
     ):
         del state_dim, kwargs
         super().__init__(env, node_dim, edge_dim, action_dim, n_agents)
-        if safety_mode not in ("efrl", "lagr"):
-            raise ValueError(f"Unknown DDPG safety_mode: {safety_mode}")
 
         self.cost_weight = cost_weight
         self.actor_gnn_layers = actor_gnn_layers
@@ -201,17 +218,9 @@ class DDPG(Algorithm):
         self.expl_noise = expl_noise
         self.replay_warmup_transitions = replay_warmup_transitions
         self.updates_per_iter = updates_per_iter
-        self.safety_mode = safety_mode
-        self.lagr_init = lagr_init
-        self.lr_lagr = lr_lagr
         self.z_min = -env.reward_max
         self.z_max = -env.reward_min
         self.iter_index = iter_index
-        self.root_finder = RootFinder(
-            z_min=self.z_min,
-            z_max=self.z_max,
-            n_agent=self.n_agents,
-        )
 
         self.lr_actor_val = lr_actor
         self.lr_critic_val = lr_critic
@@ -224,10 +233,9 @@ class DDPG(Algorithm):
             lr_critic_warmup_iters, lr_critic_trans_iters
         )
 
-        use_ef = safety_mode == "efrl"
-        self.actor = DeterministicActor(action_dim, n_agents, actor_gnn_layers, use_ef=use_ef)
-        self.critic = GraphQNet(n_agents, 1, critic_gnn_layers, use_ef=use_ef)
-        self.safety_critic = GraphQNet(n_agents, env.n_cost, critic_gnn_layers, use_ef=use_ef)
+        self.actor = DeterministicActor(action_dim, n_agents, actor_gnn_layers, use_ef=self.use_ef)
+        self.critic = GraphQNet(n_agents, 1, critic_gnn_layers, use_ef=self.use_ef)
+        self.safety_critic = GraphQNet(n_agents, env.n_cost, critic_gnn_layers, use_ef=self.use_ef)
 
         n_nodes = n_agents
         self.nominal_graph = GraphsTuple(
@@ -269,7 +277,6 @@ class DDPG(Algorithm):
         self.target_critic_params = critic_params
         self.target_safety_params = safety_params
 
-        self.lagr = jnp.ones((n_agents, env.n_cost), dtype=jnp.float32) * lagr_init
         self.init_rnn_state = jnp.zeros((n_agents, 1, 64), dtype=jnp.float32)
         self.replay = _TransitionReplay(replay_size)
         self.key = key
@@ -300,9 +307,7 @@ class DDPG(Algorithm):
             "expl_noise": self.expl_noise,
             "replay_warmup_transitions": self.replay_warmup_transitions,
             "updates_per_iter": self.updates_per_iter,
-            "safety_mode": self.safety_mode,
-            "lagr_init": self.lagr_init,
-            "lr_lagr": self.lr_lagr,
+            "safety_mode": "weighted",
             "seed": self.seed,
             "use_rnn": False,
             "iter_index": self.iter_index,
@@ -329,23 +334,20 @@ class DDPG(Algorithm):
     ) -> Tuple[Action, Array, Array]:
         params = self.params if params is None else params
         action = self.actor.apply(params["policy"], graph, z)
+        # 训练时加入探索噪声：
+        #   a_explore = clip(mu(s,z) + eps, -1, 1), eps ~ N(0, sigma^2)
+        # DDPG 的 actor 本身是确定性的，所以探索必须显式加在 action 上。
         noise = jr.normal(key, action.shape) * self.expl_noise
         action = jnp.clip(action + noise, -1.0, 1.0)
         log_pi = jnp.zeros((self.n_agents,), dtype=jnp.float32)
         return action, log_pi, rnn_state
 
     def get_opt_z(self, graph: GraphsTuple, Vh_rnn_state: Array, params: Optional[Params] = None) -> Tuple[Array, Array]:
-        params = self.params if params is None else params
-        if self.safety_mode != "efrl":
-            z = jnp.ones((self.n_agents, 1), dtype=jnp.float32) * self.z_max
-            return z, Vh_rnn_state
-
-        def Vh_fn(z: Array):
-            action = self.actor.apply(params["policy"], graph, z)
-            Vh = self.safety_critic.apply(params["safety_critic"], graph, action, z)
-            return Vh, Vh_rnn_state
-
-        return self.root_finder.get_dec_opt_z(Vh_fn, graph)
+        # params = self.params if params is None else params
+        # 非efrl环境不需要使用变化的z
+        del graph, params
+        z = jnp.ones((self.n_agents, 1), dtype=jnp.float32) * self.z_max
+        return z, Vh_rnn_state
 
     @ft.partial(jax.pmap, in_axes=(None, None, 0), axis_name="n_gpu", static_broadcasted_argnums=(0,))
     def collect(self, params: Params, b_key: PRNGKey) -> Rollout:
@@ -366,14 +368,13 @@ class DDPG(Algorithm):
         info_acc = None
         for _ in range(self.updates_per_iter):
             batch = self.replay.sample(self.batch_size, num_devices)
-            critic, safety, actor, target_actor, target_critic, target_safety, lagr, info = self.pmap_update(
+            critic, safety, actor, target_actor, target_critic, target_safety, info = self.pmap_update(
                 self.critic_train_state,
                 self.safety_train_state,
                 self.actor_train_state,
                 self.target_actor_params,
                 self.target_critic_params,
                 self.target_safety_params,
-                self.lagr,
                 batch,
             )
             self.critic_train_state = _tree_first_device(critic)
@@ -382,7 +383,6 @@ class DDPG(Algorithm):
             self.target_actor_params = _tree_first_device(target_actor)
             self.target_critic_params = _tree_first_device(target_critic)
             self.target_safety_params = _tree_first_device(target_safety)
-            self.lagr = _tree_first_device(lagr)
             info_single = _tree_first_device(info)
             info_acc = info_single if info_acc is None else jtu.tree_map(lambda a, b: a + b, info_acc, info_single)
 
@@ -394,7 +394,7 @@ class DDPG(Algorithm):
         self.iter_index += 1
         return info_acc
 
-    @ft.partial(jax.pmap, in_axes=(None, None, None, None, None, None, None, None, 0),
+    @ft.partial(jax.pmap, in_axes=(None, None, None, None, None, None, None, 0),
                 axis_name="n_gpu", static_broadcasted_argnums=(0,))
     def pmap_update(
             self,
@@ -404,18 +404,19 @@ class DDPG(Algorithm):
             target_actor_params: Params,
             target_critic_params: Params,
             target_safety_params: Params,
-            lagr: Array,
             batch: Rollout,
     ):
         critic_state, safety_state, critic_info = self.update_critics(
             critic_state, safety_state, target_actor_params, target_critic_params, target_safety_params, batch
         )
-        actor_state, lagr, actor_info = self.update_actor(actor_state, critic_state, safety_state, lagr, batch)
+        actor_state, actor_info = self.update_actor(actor_state, critic_state, safety_state, batch)
+        # DDPG 使用 target network 降低 bootstrapping 震荡：
+        #   theta_bar <- tau * theta + (1 - tau) * theta_bar
         target_actor_params = optax.incremental_update(actor_state.params, target_actor_params, self.tau)
         target_critic_params = optax.incremental_update(critic_state.params, target_critic_params, self.tau)
         target_safety_params = optax.incremental_update(safety_state.params, target_safety_params, self.tau)
         critic_info.update(actor_info)
-        return critic_state, safety_state, actor_state, target_actor_params, target_critic_params, target_safety_params, lagr, critic_info
+        return critic_state, safety_state, actor_state, target_actor_params, target_critic_params, target_safety_params, critic_info
 
     def _batched_actor(self, params: Params, graphs: GraphsTuple, zs: Array) -> Action:
         return jax.vmap(lambda g, z: self.actor.apply(params, g, z))(graphs, zs)
@@ -442,30 +443,27 @@ class DDPG(Algorithm):
         costs = jnp.nan_to_num(batch.costs, nan=1e3, posinf=1e3, neginf=-1e3)
         dones = batch.dones.astype(jnp.float32)
         zs = batch.zs
-        next_zs = jnp.clip((zs + rewards[:, :, None]) / self.gamma, self.z_min, self.z_max)
 
+        # Bellman target 中的下一步 action 使用 target actor：
+        #   a' = mu_target(s')
+        next_zs = zs
         next_actions = self._batched_actor(target_actor_params, batch.next_graph, next_zs)
         next_q = self._batched_q(target_critic_params, batch.next_graph, next_actions, next_zs).squeeze(-1)
-        if self.safety_mode == "efrl":
-            # EFRL 中 Vl 表示累计损失，单步损失 l = -reward。
-            q_target = -rewards + self.gamma * (1.0 - dones[:, None]) * next_q
-        else:
-            q_target = rewards + self.gamma * (1.0 - dones[:, None]) * next_q
+        q_target = rewards + self.gamma * (1.0 - dones[:, None]) * next_q
         q_target = jnp.clip(q_target, -1e4, 1e4)
 
         next_safety_q = self._batched_safety_q(target_safety_params, batch.next_graph, next_actions, next_zs)
-        if self.safety_mode == "efrl":
-            # 对齐 compute_dec_efocp_gae 中的 stabilize-avoid DP：
-            # Vh = max(h, (1-gamma) * max(h) + gamma * Vh_next)。
-            h_disc = jnp.max(costs, axis=-1, keepdims=True)
-            safety_target = jnp.maximum(costs, (1.0 - self.gamma) * h_disc + self.gamma * next_safety_q)
-        else:
-            safety_target = jnp.maximum(costs, 0.0) + self.gamma * (1.0 - dones[:, None, None]) * next_safety_q
+        # cost critic 学折扣累计正 cost：
+        #   y_c = max(cost, 0) + gamma * Qc_target(s', mu_target(s'))
+        safety_target = jnp.maximum(costs, 0.0) + self.gamma * (1.0 - dones[:, None, None]) * next_safety_q
         safety_target = jnp.clip(safety_target, -1e4, 1e4)
 
         def critic_loss_fn(q_params, safety_params):
             q_pred = self._batched_q(q_params, batch.graph, batch.actions, zs).squeeze(-1)
             safety_pred = self._batched_safety_q(safety_params, batch.graph, batch.actions, zs)
+            # critic 使用均方 Bellman error：
+            #   L_Qr = mean((Qr - y_r)^2)
+            #   L_Qc = mean((Qc - y_c)^2)
             loss_q = optax.l2_loss(q_pred, q_target).mean()
             loss_safety = optax.l2_loss(safety_pred, safety_target).mean()
             info = {
@@ -499,7 +497,6 @@ class DDPG(Algorithm):
             actor_state: TrainState,
             critic_state: TrainState,
             safety_state: TrainState,
-            lagr: Array,
             batch: Rollout,
     ):
         zs = batch.zs
@@ -508,13 +505,11 @@ class DDPG(Algorithm):
             actions = self._batched_actor(actor_params, batch.graph, zs)
             q = self._batched_q(critic_state.params, batch.graph, actions, zs).squeeze(-1)
             safety_q = self._batched_safety_q(safety_state.params, batch.graph, actions, zs)
-            if self.safety_mode == "efrl":
-                z = zs.squeeze(-1)
-                objective = jnp.maximum(jnp.max(safety_q, axis=-1), q - z)
-                loss = objective.mean()
-            else:
-                penalty = (jnp.maximum(lagr, 0.0)[None, :, :] * safety_q).mean(axis=-1)
-                loss = (-q + penalty).mean()
+            # 固定权重 actor objective：
+            #   max_mu Qr(s,mu(s)) - cost_weight * Qc(s,mu(s))
+            # 代码中转为最小化 -Qr + cost_weight * Qc。
+            penalty = self.cost_weight * safety_q.mean(axis=-1)
+            loss = (-q + penalty).mean()
             info = {
                 "policy/loss": jax.lax.pmean(loss, axis_name="n_gpu"),
                 "policy/q": jax.lax.pmean(q.mean(), axis_name="n_gpu"),
@@ -528,16 +523,11 @@ class DDPG(Algorithm):
         grad, grad_norm = compute_norm_and_clip(grad, self.max_grad_norm)
         actor_state = actor_state.apply_gradients(grads=grad)
 
-        if self.safety_mode == "lagr":
-            violation = jax.lax.pmean(safety_q.mean(axis=0), axis_name="n_gpu")
-            lagr = nn.relu(lagr + self.lr_lagr * violation)
-            info["policy/mean_lagr"] = jax.lax.pmean(lagr.mean(), axis_name="n_gpu")
-
         info.update({
             "policy/has_nan": grad_has_nan,
             "policy/grad_norm": jax.lax.pmean(grad_norm, axis_name="n_gpu"),
         })
-        return actor_state, lagr, info
+        return actor_state, info
 
     def save(self, save_dir: str, step: int, params_to_save: dict = None):
         model_dir = os.path.join(save_dir, str(step))
@@ -546,7 +536,6 @@ class DDPG(Algorithm):
         pickle.dump(params["policy"], open(os.path.join(model_dir, "actor.pkl"), "wb"))
         pickle.dump(params["critic"], open(os.path.join(model_dir, "critic.pkl"), "wb"))
         pickle.dump(params["safety_critic"], open(os.path.join(model_dir, "safety_critic.pkl"), "wb"))
-        pickle.dump(self.lagr, open(os.path.join(model_dir, "lagr.pkl"), "wb"))
 
     def load(self, load_dir: str, step: int):
         path = os.path.join(load_dir, str(step))
@@ -559,6 +548,3 @@ class DDPG(Algorithm):
         self.target_actor_params = actor_params
         self.target_critic_params = critic_params
         self.target_safety_params = safety_params
-        lagr_path = os.path.join(path, "lagr.pkl")
-        if os.path.exists(lagr_path):
-            self.lagr = pickle.load(open(lagr_path, "rb"))

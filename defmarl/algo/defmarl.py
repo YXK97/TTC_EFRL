@@ -64,7 +64,7 @@ class DefMARL(Algorithm):
             coef_ent_trans_iters: Optional[int] = None,
 
             batch_size: int = 8192,
-            epoch_ppo: int = 1,
+            epoch_ppo: int = 4,
             clip_eps: float = 0.25,
             gae_lambda: float = 0.95,
             max_grad_norm: float = 2.0,

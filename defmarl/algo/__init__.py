@@ -5,6 +5,8 @@ from .informarl_lagr import InforMARLLagr
 from .defmarl_normedGraph import DefMARL_normedGraph
 from .defmarl_CBFs import DefMARL_CBFs
 from .ddpg import DDPG
+from .ddpg_efrl import DDPGEFRL
+from .ddpg_lagr import DDPGLagr
 
 
 def make_algo(algo: str, **kwargs) -> Algorithm:
@@ -21,8 +23,8 @@ def make_algo(algo: str, **kwargs) -> Algorithm:
     elif algo == 'ddpg':
         return DDPG(**kwargs)
     elif algo == 'ddpg_efrl':
-        return DDPG(safety_mode='efrl', **kwargs)
+        return DDPGEFRL(**kwargs)
     elif algo == 'ddpg_lagr':
-        return DDPG(safety_mode='lagr', **kwargs)
+        return DDPGLagr(**kwargs)
     else:
         raise ValueError(f'Unknown algorithm: {algo}')
