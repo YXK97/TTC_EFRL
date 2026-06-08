@@ -47,6 +47,7 @@ def compute_dec_efocp_gae(
     Tp1_Vl: Float[Array, "Tp1"],
     disc_gamma: float,
     gae_lambda: float,
+    h_discount_target: Optional[float] = None,
     discount_to_max: bool = True
 ) -> Tuple[Float[Array, "T a nh"], TFloat, Float[Array, "T a"]]:
     """
@@ -75,6 +76,8 @@ def compute_dec_efocp_gae(
             h_disc = hs
 
         disc_to_h = (1 - disc_gamma) * h_disc[None, :, None] + disc_gamma * next_Vhs_row  # (T + 1, a, h)
+        if h_discount_target is not None:
+            disc_to_h = disc_to_h + (1 - disc_gamma) * h_discount_target
         Vhs_row = assert_shape(mask_h * jnp.maximum(hs, disc_to_h), (T + 1, n_agent, nh), "Vhs_row")
         # DP for Vl. Clamp it to within J_max so it doesn't get out of hand.
         Vl_row = assert_shape(mask_l * (l + disc_gamma * next_Vl_row), (T + 1, n_agent))

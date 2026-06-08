@@ -44,7 +44,7 @@ class MVEIntersection(MVELaneChangeAndOverTake):
             -INF, INF, -INF, INF,
         ]),
         "rollout_state_range": jnp.array([
-            -110., 110., -110., 110.,
+            -100., 100., -100., 100.,
             -150., 150., -150., 150.,
             -180., 180., -360., 360.,
             -INF, INF, -INF, INF,
@@ -55,6 +55,7 @@ class MVEIntersection(MVELaneChangeAndOverTake):
             -INF, INF, -INF, INF,
             -INF, INF, -INF, INF,
         ]),
+        "comm_radius": 50,
         "lane_width": 3.,
         "intersection_radius": 17.5,
         "alpha_thresh": 1.05,

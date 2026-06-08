@@ -43,7 +43,7 @@ class MVELaneChangeAndOverTake(MVE):
         "ego_Iz": 752.25333, # kg*m^2，假设质心位于几何中心
         "ego_Cf": 47850., # N/rad
         "ego_Cr": 46510., # N/rad00
-        "comm_radius": 100,
+        "comm_radius": 50,
         "obst_bb_size": jnp.array([4., 2.]), # bounding box的[width, height] m
 
         # [x_l, x_h, y_l, y_h, vx_l, vx_h, vy_l, vy_h, θ_l, θ_h, dθdt_l, dθdt_h, \
@@ -63,7 +63,7 @@ class MVELaneChangeAndOverTake(MVE):
 
         "lane_width": 3, # 车道宽度，m
         "v_bias": 5, # 可允许的速度偏移量
-        "alpha_thresh": 1.4, # alpha大于thresh时才判定为安全，用于避障时让agent离obst不要那么近
+        "alpha_thresh": 1.05, # alpha大于thresh时才判定为安全，用于避障时让agent离obst不要那么近
     }
     PARAMS.update({
         "ego_radius": jnp.linalg.norm(PARAMS["ego_bb_size"]/2), # m
@@ -810,8 +810,8 @@ class MVELaneChangeAndOverTake(MVE):
 
     @override
     def action_lim(self) -> Tuple[Action, Action]:
-        lower_lim = jnp.array([-1., -7.])[None, :].repeat(self.num_agents, axis=0) # ax: m/s^2, δ: °
-        upper_lim = jnp.array([2., 7.])[None, :].repeat(self.num_agents, axis=0)
+        lower_lim = jnp.array([-5., -7.])[None, :].repeat(self.num_agents, axis=0) # ax: m/s^2, δ: °
+        upper_lim = jnp.array([5., 7.])[None, :].repeat(self.num_agents, axis=0)
         return lower_lim, upper_lim
 
     @override

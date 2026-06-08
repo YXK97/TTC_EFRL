@@ -66,7 +66,13 @@ class DefMARL(Algorithm):
             batch_size: int = 8192,
             epoch_ppo: int = 4,
             clip_eps: float = 0.25,
+            clip_eps_decay: bool = False,
+            clip_eps_init: Optional[float] = None,
+            clip_eps_decay_ratio: Optional[float] = None,
+            clip_eps_warmup_iters: Optional[int] = None,
+            clip_eps_trans_iters: Optional[int] = None,
             gae_lambda: float = 0.95,
+            h_discount_target: Optional[float] = None,
             max_grad_norm: float = 2.0,
             seed: int = 0,
             use_rnn: bool = True,
@@ -115,8 +121,14 @@ class DefMARL(Algorithm):
 
         self.batch_size = batch_size
         self.epoch_ppo = epoch_ppo
-        self.clip_eps = clip_eps
+        self.clip_eps_val = clip_eps
+        self.clip_eps_decay = clip_eps_decay
+        self.clip_eps_init = clip_eps_init
+        self.clip_eps_decay_ratio = clip_eps_decay_ratio
+        self.clip_eps_warmup_iters = clip_eps_warmup_iters
+        self.clip_eps_trans_iters = clip_eps_trans_iters
         self.gae_lambda = gae_lambda
+        self.h_discount_target = h_discount_target
         self.max_grad_norm = max_grad_norm
         self.seed = seed
         self.rollout_length = rollout_length
@@ -136,6 +148,8 @@ class DefMARL(Algorithm):
             self.lr_critic_decay_ratio, self.lr_critic_warmup_iters, self.lr_critic_trans_iters)
         self.coef_ent_sched = val_to_optax_schedule(self.coef_ent_val, self.coef_ent_decay, self.coef_ent_init,
             self.coef_ent_decay_ratio, self.coef_ent_warmup_iters, self.coef_ent_trans_iters)
+        self.clip_eps_sched = val_to_optax_schedule(self.clip_eps_val, self.clip_eps_decay, self.clip_eps_init,
+            self.clip_eps_decay_ratio, self.clip_eps_warmup_iters, self.clip_eps_trans_iters)
         self.policy_tx = get_default_tx(self.lr_actor_sched)
         self.critic_tx = get_default_tx(self.lr_critic_sched)
         self.Vh_tx = get_default_tx(self.lr_critic_sched)
@@ -314,6 +328,10 @@ class DefMARL(Algorithm):
         return self.coef_ent_sched(self.iter_index)
 
     @property
+    def clip_eps(self):
+        return self.clip_eps_sched(self.iter_index)
+
+    @property
     def config(self) -> dict:
         return {
             'cost_weight': self.cost_weight,
@@ -345,8 +363,14 @@ class DefMARL(Algorithm):
 
             'batch_size': self.batch_size,
             'epoch_ppo': self.epoch_ppo,
-            'clip_eps': self.clip_eps,
+            'clip_eps_val': self.clip_eps_val,
+            'clip_eps_decay': self.clip_eps_decay,
+            'clip_eps_init': self.clip_eps_init,
+            'clip_eps_decay_ratio': self.clip_eps_decay_ratio,
+            'clip_eps_warmup_iters': self.clip_eps_warmup_iters,
+            'clip_eps_trans_iters': self.clip_eps_trans_iters,
             'gae_lambda': self.gae_lambda,
+            'h_discount_target': self.h_discount_target,
             'max_grad_norm': self.max_grad_norm,
             'seed': self.seed,
             'use_rnn': self.use_rnn,
@@ -447,7 +471,8 @@ class DefMARL(Algorithm):
 
         update_info_single.update({'hyper/lr_actor': self.lr_actor,
                                    'hyper/lr_critic': self.lr_critic,
-                                   'hyper/coef_ent': self.coef_ent})
+                                   'hyper/coef_ent': self.coef_ent,
+                                   'hyper/clip_eps': self.clip_eps})
         self.iter_index += 1
 
         return update_info_single
@@ -464,7 +489,10 @@ class DefMARL(Algorithm):
             np.random.shuffle(idx)
             rnn_chunk_ids = jnp.arange(rollout.dones.shape[1])
             rnn_chunk_ids = jnp.array(jnp.array_split(rnn_chunk_ids, rollout.dones.shape[1] // self.rnn_step))
-            batch_idx = jnp.array(jnp.array_split(idx, idx.shape[0] // (self.batch_size // rollout.dones.shape[1])))
+            envs_per_batch = max(1, self.batch_size // rollout.dones.shape[1])
+            if idx.shape[0] % envs_per_batch != 0:
+                envs_per_batch = max(d for d in range(1, envs_per_batch + 1) if idx.shape[0] % d == 0)
+            batch_idx = jnp.array(jnp.array_split(idx, idx.shape[0] // envs_per_batch))
             critic_train_state, Vh_train_state, policy_train_state, update_info = self.update_inner(
                 critic_train_state,
                 Vh_train_state,
@@ -535,7 +563,12 @@ class DefMARL(Algorithm):
 
         # calculate Dec-EFOCP GAE
         bTah_Qh, bT_Ql, bTa_Q = jax.vmap(
-            ft.partial(compute_dec_efocp_gae, disc_gamma=self.gamma, gae_lambda=self.gae_lambda)
+            ft.partial(
+                compute_dec_efocp_gae,
+                disc_gamma=self.gamma,
+                gae_lambda=self.gae_lambda,
+                h_discount_target=self.h_discount_target
+            )
         )(Tah_hs=rollout.costs,
           T_l=-rollout.rewards, # 注意这里这个负号！！！！！！！！
           T_z=rollout.zs.squeeze(-1)[:, :, 0],
@@ -545,7 +578,8 @@ class DefMARL(Algorithm):
         # calculate advantages and normalize
         bTa_V = jax_vmap(jax_vmap(compute_dec_efocp_V))(rollout.zs.squeeze(-1)[:, :, 0], bTah_Vh, bT_Vl)
         assert bTa_V.shape == (b, T, a)
-        bTa_A = bTa_Q - bTa_V
+        bTa_A_raw = bTa_Q - bTa_V
+        bTa_A = bTa_A_raw
         bTa_A = (bTa_A - bTa_A.mean(axis=1, keepdims=True)) / (bTa_A.std(axis=1, keepdims=True) + 1e-8)
         assert bTa_A.shape == (b, T, a)
 
@@ -567,6 +601,33 @@ class DefMARL(Algorithm):
 
         # get training info of the last PPO epoch
         info = jtu.tree_map(lambda x: jax.lax.pmean(x[-1], axis_name='n_gpu'), info)
+
+        bTa_h_max = rollout.costs.max(axis=-1)
+        bTa_Qh_max = bTah_Qh.max(axis=-1)
+        bTa_Vh_max = bTah_Vh.max(axis=-1)
+        bTa_h_safe = bTa_h_max < 0.0
+        safe_count = jnp.maximum(bTa_h_safe.sum(), 1)
+        info.update({
+            'dec_efocp/Qh_mean': jax.lax.pmean(bTah_Qh.mean(), axis_name='n_gpu'),
+            'dec_efocp/Qh_max': jax.lax.pmax(bTah_Qh.max(), axis_name='n_gpu'),
+            'dec_efocp/Vh_mean': jax.lax.pmean(bTah_Vh.mean(), axis_name='n_gpu'),
+            'dec_efocp/Vh_max': jax.lax.pmax(bTah_Vh.max(), axis_name='n_gpu'),
+            'dec_efocp/Q_mean': jax.lax.pmean(bTa_Q.mean(), axis_name='n_gpu'),
+            'dec_efocp/V_mean': jax.lax.pmean(bTa_V.mean(), axis_name='n_gpu'),
+            'dec_efocp/adv_raw_mean': jax.lax.pmean(bTa_A_raw.mean(), axis_name='n_gpu'),
+            'dec_efocp/adv_raw_std': jax.lax.pmean(bTa_A_raw.std(), axis_name='n_gpu'),
+            'dec_efocp/h_safe_frac': jax.lax.pmean(bTa_h_safe.mean(), axis_name='n_gpu'),
+            'dec_efocp/Qh_pos_frac': jax.lax.pmean((bTa_Qh_max >= 0.0).mean(), axis_name='n_gpu'),
+            'dec_efocp/Vh_pos_frac': jax.lax.pmean((bTa_Vh_max >= 0.0).mean(), axis_name='n_gpu'),
+            'dec_efocp/Qh_pos_given_h_safe_frac': jax.lax.pmean(
+                jnp.logical_and(bTa_h_safe, bTa_Qh_max >= 0.0).sum() / safe_count,
+                axis_name='n_gpu'
+            ),
+            'dec_efocp/Vh_pos_given_h_safe_frac': jax.lax.pmean(
+                jnp.logical_and(bTa_h_safe, bTa_Vh_max >= 0.0).sum() / safe_count,
+                axis_name='n_gpu'
+            ),
+        })
 
         return critic_train_state, Vh_train_state, policy_train_state, info
 

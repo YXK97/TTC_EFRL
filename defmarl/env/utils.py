@@ -415,7 +415,8 @@ def relative_state(ego_state: AgentState, target_state: AgentState) -> AgentStat
     target_v_mps = Q_target @ target_v_b_mps  # target在世界坐标系下的速度
 
     # 相对角与角速度
-    rel_theta_rad = target_theta_rad - ego_theta_rad
+    rel_theta_deg = normalize_angle((target_theta_rad - ego_theta_rad) * 180.0 / jnp.pi)
+    rel_theta_rad = rel_theta_deg * jnp.pi / 180.0
     rel_omega_radps = target_omega_radps - ego_omega_radps
 
     # 相对坐标 (投影到ego车身坐标系)
@@ -469,7 +470,8 @@ def relative_state_delta_state(ego_state: AgentState, target_state: AgentState) 
     target_v_mps = Q_target @ target_v_b_mps  # target在世界坐标系下的速度
 
     # 相对角与角速度
-    rel_theta_rad = target_theta_rad - ego_theta_rad
+    rel_theta_deg = normalize_angle((target_theta_rad - ego_theta_rad) * 180.0 / jnp.pi)
+    rel_theta_rad = rel_theta_deg * jnp.pi / 180.0
     rel_omega_radps = target_omega_radps - ego_omega_radps
 
     # 相对坐标 (投影到ego车身坐标系)

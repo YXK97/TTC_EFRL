@@ -40,6 +40,7 @@ def train(args):
         env_id=args.env,
         num_agents=args.num_agents,
         num_obs=args.obs,
+        max_step=args.max_step,
         full_observation=args.full_observation,
         area_size=args.area_size,
         reward_min=args.reward_min,
@@ -49,6 +50,7 @@ def train(args):
         env_id=args.env,
         num_agents=args.num_agents,
         num_obs=args.obs,
+        max_step=args.max_step,
         full_observation=args.full_observation,
         area_size=args.area_size,
         reward_min=args.reward_min,
@@ -112,7 +114,14 @@ def train(args):
         use_lstm=args.use_lstm,
         rnn_step=args.rnn_step,
         gamma=args.gamma,
+        gae_lambda=args.gae_lambda,
+        h_discount_target=args.h_discount_target,
         clip_eps=args.clip_eps,
+        clip_eps_decay=args.clip_eps_decay,
+        clip_eps_init=args.clip_eps_init,
+        clip_eps_decay_ratio=args.clip_eps_decay_ratio,
+        clip_eps_warmup_iters=args.clip_eps_warmup_iters,
+        clip_eps_trans_iters=args.clip_eps_trans_iters,
         lagr_init=args.lagr_init,
         lr_lagr=args.lr_lagr,
         tau=args.tau,
@@ -219,7 +228,14 @@ def main():
     parser.add_argument('--lagr-init', type=float, default=0.78)#0.78
     parser.add_argument('--lr-lagr', type=float, default=1e-7)
     parser.add_argument('--clip-eps', type=float, default=0.25)
+    parser.add_argument("--clip-eps-decay", action="store_true", default=False)
+    parser.add_argument("--clip-eps-init", type=float, default=None)
+    parser.add_argument("--clip-eps-decay-ratio", type=float, default=None)
+    parser.add_argument("--clip-eps-warmup-iters", type=int, default=None)
+    parser.add_argument("--clip-eps-trans-iters", type=int, default=None)
     parser.add_argument("--gamma", type=float, default=0.99)
+    parser.add_argument("--gae-lambda", type=float, default=0.95)
+    parser.add_argument("--h-discount-target", type=float, default=None)
     parser.add_argument("--max-grad-norm", type=float, default=2.)
     parser.add_argument("--tau", type=float, default=0.005)
     parser.add_argument("--replay-size", type=int, default=250000)
@@ -231,6 +247,7 @@ def main():
     # environment arguments
     parser.add_argument("--reward-min", type=float, default=-20.)
     parser.add_argument("--reward-max", type=float, default=0.5)
+    parser.add_argument("--max-step", type=int, default=None)
     parser.add_argument('--full-observation', action='store_true', default=False)
     parser.add_argument("--area-size", type=float, default=None)
 

@@ -286,12 +286,13 @@ class IntersectionSceneBase(ABC):
 class IntersectionTurnScene(IntersectionSceneBase):
     """十字路口转向类基础场景。
 
-    只处理转向，不处理直行。agent 从随机起始道路的生成区出发，沿同一车道号左转或右转。
+    只处理转向，不处理直行。agent 从西路生成区出发，沿同一车道号左转或右转。
     目标轨迹在道路区域沿车道中心，在转向区以圆弧连接，速度由生成区高速逐渐降至转向区低速，
     再在终止道路减速区逐渐升回生成区速度。
     """
 
     dynamic_mode = 0
+    turn_sign = 1
 
     @property
     def name(self) -> str:
@@ -349,16 +350,17 @@ class IntersectionTurnScene(IntersectionSceneBase):
          agent_r_key, agent_lat_key, agent_speed_key, agent_theta_key, sobst_idx_key,
          sobst_pos_key, sobst_theta_key, dyn_road_key, dyn_lane_key, dyn_speed_key,
          dyn_jitter_key) = jr.split(self.key, 17)
+        del start_road_key, turn_key, turn_speed_key, agent_theta_key
 
-        start_road_idx = jr.randint(start_road_key, shape=(), minval=0, maxval=4)
-        turn_sign = jr.choice(turn_key, jnp.array([-1, 1], dtype=jnp.int32), shape=())
+        start_road_idx = jnp.array(3, dtype=jnp.int32)
+        turn_sign = jnp.array(self.turn_sign, dtype=jnp.int32)
         lane_idx = jr.randint(lane_key, shape=(), minval=0, maxval=3)
         lane_offset = LANE_CENTERS[lane_idx]
 
         # 减速区长度在场景生成时确定，范围为 40m 到 60m。
         decel_len = jr.uniform(decel_key, shape=(), dtype=jnp.float32, minval=40.0, maxval=60.0)
         gen_speed = jr.uniform(gen_speed_key, shape=(), dtype=jnp.float32, minval=60.0, maxval=90.0)
-        turn_speed = jr.uniform(turn_speed_key, shape=(), dtype=jnp.float32, minval=30.0, maxval=40.0)
+        turn_speed = jnp.array(40.0, dtype=jnp.float32)
         anS_goals, an4_dsYddts = generate_turn_path_points(
             self.num_agents,
             self.num_ref_points,
@@ -375,7 +377,10 @@ class IntersectionTurnScene(IntersectionSceneBase):
             agent_r_key, shape=(self.num_agents,), dtype=jnp.float32,
             minval=-ROAD_HALF, maxval=gen_zone_high,
         )
-        a_agent_lat = jnp.zeros((self.num_agents,), dtype=jnp.float32)
+        a_agent_lat = jr.uniform(
+            agent_lat_key, shape=(self.num_agents,), dtype=jnp.float32,
+            minval=-0.5, maxval=0.5,
+        )
         a_agent_speed = jr.uniform(
             agent_speed_key, shape=(self.num_agents,), dtype=jnp.float32,
             minval=60.0, maxval=90.0,
@@ -429,66 +434,64 @@ class IntersectionTurnScene(IntersectionSceneBase):
 
 
 class IntersectionTurnPerpendicularDynamicScene(IntersectionTurnScene):
-    """转向场景一：动态障碍车方向与 agent 初始道路方向垂直。
+    """左转场景：agent 从西路左转，动态障碍车方向与 agent 初始道路方向垂直。
 
-    图例以 agent 从南路左转到西路为例，实际生成时起始道路、左右转和车道均随机：
+    图例：
     ==================================================
                  北路
                   |
-                  |
-    西路 <----- arc/reference
+                  ↑ reference / arc
+    西路 ego ■ ---+
     -----------□□------------  dynamic obstacle
                   |
                   |
-                ego ■
                  南路
     ==================================================
     """
 
     dynamic_mode = 0
+    turn_sign = 1
 
     @property
     def name(self) -> str:
-        return "intersection_turn_with_perpendicular_dynamic_obstacle"
+        return "intersection_left_turn_from_west_with_perpendicular_dynamic_obstacle"
 
 
 class IntersectionTurnParallelDynamicScene(IntersectionTurnScene):
-    """转向场景二：动态障碍车方向与 agent 初始道路方向平行。
+    """右转场景：agent 从西路右转，动态障碍车方向与 agent 初始道路方向平行。
 
-    图例以 agent 从南路右转到东路为例，动态障碍车在非 agent 初始车道直行穿过路口：
+    图例：
     ==================================================
                  北路
-                  □  dynamic obstacle
                   |
                   |
-    西路 ----------+---------- 东路 / reference
+    西路 ego ■ ---+---------- 东路
                   |
-                  |
-             ego ■
+                  ↓ reference / arc
                  南路
     ==================================================
     """
 
     dynamic_mode = 1
+    turn_sign = -1
 
     @property
     def name(self) -> str:
-        return "intersection_turn_with_parallel_dynamic_obstacle"
+        return "intersection_right_turn_from_west_with_parallel_dynamic_obstacle"
 
 
 class IntersectionStraightPerpendicularDynamicScene(IntersectionSceneBase):
-    """直行场景：agent 从随机起始道路直行穿过路口，动态障碍车从垂直道路驶入。
+    """直行场景：agent 从西路直行穿过路口，动态障碍车从垂直道路驶入。
 
-    图例以 agent 从南路直行到北路为例，实际生成时起始道路和车道均随机：
+    图例：
     ==================================================
-                 北路 / reference path
+                 北路
                   |
                   |
-    西路 ---- □ ----+-----> 东路  dynamic obstacle
+    西路 ego ■ ----+-----> 东路 / reference path
                   |
                   ♦ static obstacle
                   |
-                ego ■
                  南路
     ==================================================
     """
@@ -532,15 +535,16 @@ class IntersectionStraightPerpendicularDynamicScene(IntersectionSceneBase):
          agent_r_key, agent_lat_key, agent_speed_key, agent_theta_key, sobst_idx_key,
          sobst_pos_key, sobst_theta_key, dyn_road_key, dyn_lane_key, dyn_speed_key,
          dyn_jitter_key) = jr.split(self.key, 16)
+        del start_road_key, crossing_speed_key, agent_theta_key
 
-        start_road_idx = jr.randint(start_road_key, shape=(), minval=0, maxval=4)
+        start_road_idx = jnp.array(3, dtype=jnp.int32)
         lane_idx = jr.randint(lane_key, shape=(), minval=0, maxval=3)
         lane_offset = LANE_CENTERS[lane_idx]
 
         # 减速区长度在场景生成时确定，范围为 40m 到 60m。
         decel_len = jr.uniform(decel_key, shape=(), dtype=jnp.float32, minval=40.0, maxval=60.0)
         gen_speed = jr.uniform(gen_speed_key, shape=(), dtype=jnp.float32, minval=60.0, maxval=90.0)
-        crossing_speed = jr.uniform(crossing_speed_key, shape=(), dtype=jnp.float32, minval=30.0, maxval=40.0)
+        crossing_speed = jnp.array(40.0, dtype=jnp.float32)
         anS_goals, an4_dsYddts = generate_straight_path_points(
             self.num_agents,
             self.num_ref_points,
@@ -556,7 +560,10 @@ class IntersectionStraightPerpendicularDynamicScene(IntersectionSceneBase):
             agent_r_key, shape=(self.num_agents,), dtype=jnp.float32,
             minval=-ROAD_HALF, maxval=gen_zone_high,
         )
-        a_agent_lat = jnp.zeros((self.num_agents,), dtype=jnp.float32)
+        a_agent_lat = jr.uniform(
+            agent_lat_key, shape=(self.num_agents,), dtype=jnp.float32,
+            minval=-0.5, maxval=0.5,
+        )
         a_agent_speed = jr.uniform(
             agent_speed_key, shape=(self.num_agents,), dtype=jnp.float32,
             minval=60.0, maxval=90.0,
