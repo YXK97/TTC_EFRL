@@ -189,11 +189,23 @@ def generate_turn_path_points(num_agents: int,
     onenS_goals = jnp.stack([xs, ys, vx_kmph, vy_kmph, theta_deg, dtheta_degps, zeros, zeros], axis=1)[None, :, :]
     anS_goals = jnp.repeat(onenS_goals, num_agents, axis=0)
 
-    # 兼容原横向控制接口。交叉口中这里记录世界 y 方向的参考量及其近似导数。
-    vy_mps = vy_kmph / 3.6
-    ay = jnp.where(in_arc, turn_sign * speed_mps ** 2 * jnp.cos(theta_arc_rad) / turn_radius, 0.0)
-    jy = jnp.zeros_like(ay)
-    one4_dsYddts = jnp.stack([ys, vy_mps, ay, jy], axis=1)[None, :, :]
+    # 兼容原 UFTSTC 横向控制接口。与 designed_scene_gen.py 保持一致：
+    # 对可写成 y=f(x) 的路段，使用 [y, dy/dx*vx, d2y/dx2*vx^2, d3y/dx3*vx^3]。
+    cos_theta = jnp.cos(theta_arc_rad)
+    safe_cos_theta = jnp.where(
+        jnp.abs(cos_theta) < 1e-3,
+        jnp.sign(cos_theta + 1e-6) * 1e-3,
+        cos_theta,
+    )
+    curvature = turn_sign / turn_radius
+    dys = jnp.where(in_arc, jnp.tan(theta_arc_rad), 0.0)
+    ddys = jnp.where(in_arc, curvature / safe_cos_theta ** 3, 0.0)
+    dddys = jnp.where(in_arc, 3.0 * curvature ** 2 * jnp.sin(theta_arc_rad) / safe_cos_theta ** 5, 0.0)
+    vxs_mps = vx_kmph / 3.6
+    dYdt = vxs_mps * dys
+    ddYdt = vxs_mps ** 2 * ddys
+    dddYdt = vxs_mps ** 3 * dddys
+    one4_dsYddts = jnp.stack([ys, dYdt, ddYdt, dddYdt], axis=1)[None, :, :]
     an4_dsYddts = jnp.repeat(one4_dsYddts, num_agents, axis=0)
     return anS_goals, an4_dsYddts
 
@@ -669,162 +681,100 @@ def _fixed_dynamic_obstacle_to_conflict(obst_road_idx: Array, obst_lane_offset: 
     return _state_xy_speed_theta(xy, speed_kmph, theta_deg)
 
 
-class HandMadeIntersectionStraightSouthNorth(IntersectionSceneBase):
-    """手写直行场景：agent 从南路中间车道直行到北路，动态障碍车从西路横穿。
+class HandMadeIntersectionLeftTurnWestNorthUFTSTC(IntersectionSceneBase):
+    """确定左转场景：agent 从西路南侧第 0 车道左转到北路。
 
-    ==================================================
-                 北路 / reference path
-                  |
-                  ♦ static obstacle
-                  |
-    西路  □ ------>+---------- 东路
-                  |
-                  |
-                ego ■
-                 南路
-    ==================================================
+    agent 初始速度 80km/h；生成区/驶离区参考速度 90km/h，转向区 40km/h。
+    静态障碍车固定在西路靠近转向区的过渡区，动态障碍车从东路北侧第 0 车道驶向西路。
     """
 
     @property
     def name(self) -> str:
-        return "handmade_intersection_straight_south_to_north"
+        return "handmade_uftstc_left_turn_west_to_north"
 
     def make(self) -> Tuple[AgentState, ObstState, PathRefs, jnp.ndarray]:
-        start_road_idx = jnp.array(0, dtype=jnp.int32)
-        lane_offset = jnp.array(0.0, dtype=jnp.float32)
-        decel_len = jnp.array(50.0, dtype=jnp.float32)
-        gen_speed = jnp.array(80.0, dtype=jnp.float32)
-        crossing_speed = jnp.array(35.0, dtype=jnp.float32)
-        anS_goals, an4_dsYddts = generate_straight_path_points(
-            self.num_agents, self.num_ref_points, start_road_idx, lane_offset,
-            decel_len, gen_speed, crossing_speed
-        )
-
-        agent_r = jnp.array(-82.0, dtype=jnp.float32)
-        agent_speed = jnp.array(85.0, dtype=jnp.float32)
-        aS_agent_state = _fixed_agent_states(self.num_agents, start_road_idx, agent_r, lane_offset, agent_speed)
-
-        S_sobst_state = _fixed_static_obstacle_from_ref(
-            anS_goals, int((ROAD_HALF + 28.0) / POINT_INTERVAL),
-            jnp.array([0.5, 0.0], dtype=jnp.float32),
-            jnp.array(0.0, dtype=jnp.float32),
-        )
-
-        avg_speed_mps = ((agent_speed + crossing_speed) * 0.5) / 3.6
-        t_to_turn = (-TURN_HALF - agent_r) / avg_speed_mps
-        obst_road_idx = jnp.array(3, dtype=jnp.int32)
-        obst_lane_offset = jnp.array(0.0, dtype=jnp.float32)
-        conflict_xy = jnp.array([0.0, 0.0], dtype=jnp.float32)
-        S_mobst_state = _fixed_dynamic_obstacle_to_conflict(
-            obst_road_idx, obst_lane_offset, jnp.array(70.0, dtype=jnp.float32), conflict_xy, t_to_turn
-        )
-        oS_obst_state = jnp.stack([S_sobst_state, S_mobst_state], axis=0)
-        return aS_agent_state, oS_obst_state, anS_goals, an4_dsYddts
-
-
-class HandMadeIntersectionLeftTurnSouthWest(IntersectionSceneBase):
-    """手写左转场景：agent 从南路左转到西路，动态障碍车从东路驶入。
-
-    ==================================================
-                 北路
-                  |
-                  |
-    西路 <---- reference / arc
-    -----------+<------ □  dynamic obstacle
-                  ♦ static obstacle
-                  |
-                ego ■
-                 南路
-    ==================================================
-    """
-
-    @property
-    def name(self) -> str:
-        return "handmade_intersection_left_turn_south_to_west"
-
-    def make(self) -> Tuple[AgentState, ObstState, PathRefs, jnp.ndarray]:
-        start_road_idx = jnp.array(0, dtype=jnp.int32)
+        start_road_idx = jnp.array(3, dtype=jnp.int32)
         turn_sign = jnp.array(1, dtype=jnp.int32)
-        lane_offset = jnp.array(0.0, dtype=jnp.float32)
+        lane_offset = jnp.array(3.0, dtype=jnp.float32)
         decel_len = jnp.array(50.0, dtype=jnp.float32)
-        gen_speed = jnp.array(80.0, dtype=jnp.float32)
-        turn_speed = jnp.array(35.0, dtype=jnp.float32)
+        gen_speed = jnp.array(90.0, dtype=jnp.float32)
+        turn_speed = jnp.array(40.0, dtype=jnp.float32)
         anS_goals, an4_dsYddts = generate_turn_path_points(
             self.num_agents, self.num_ref_points, start_road_idx, turn_sign,
             lane_offset, decel_len, gen_speed, turn_speed
         )
 
-        agent_r = jnp.array(-84.0, dtype=jnp.float32)
-        agent_speed = jnp.array(85.0, dtype=jnp.float32)
+        agent_r = jnp.array(-90.0, dtype=jnp.float32)
+        agent_speed = jnp.array(80.0, dtype=jnp.float32)
         aS_agent_state = _fixed_agent_states(self.num_agents, start_road_idx, agent_r, lane_offset, agent_speed)
 
-        S_sobst_state = _fixed_static_obstacle_from_ref(
-            anS_goals, int((ROAD_HALF + 20.0) / POINT_INTERVAL),
-            jnp.array([-0.5, 0.5], dtype=jnp.float32),
+        sobst_xy = _road_point(start_road_idx, jnp.array(-35.0, dtype=jnp.float32), lane_offset)
+        S_sobst_state = _state_xy_speed_theta(
+            sobst_xy,
             jnp.array(0.0, dtype=jnp.float32),
+            ROAD_THETAS_DEG[start_road_idx],
         )
 
         avg_speed_mps = ((agent_speed + turn_speed) * 0.5) / 3.6
         t_to_turn = (-TURN_HALF - agent_r) / avg_speed_mps
         obst_road_idx = jnp.array(1, dtype=jnp.int32)
-        obst_lane_offset = jnp.array(0.0, dtype=jnp.float32)
-        conflict_xy = _road_point(obst_road_idx, 0.0, obst_lane_offset)
+        obst_lane_offset = jnp.array(3.0, dtype=jnp.float32)
+        conflict_xy = _road_point(obst_road_idx, jnp.array(0.0, dtype=jnp.float32), obst_lane_offset)
         S_mobst_state = _fixed_dynamic_obstacle_to_conflict(
-            obst_road_idx, obst_lane_offset, jnp.array(75.0, dtype=jnp.float32), conflict_xy, t_to_turn
+            obst_road_idx,
+            obst_lane_offset,
+            jnp.array(60.0, dtype=jnp.float32),
+            conflict_xy,
+            t_to_turn,
         )
         oS_obst_state = jnp.stack([S_sobst_state, S_mobst_state], axis=0)
         return aS_agent_state, oS_obst_state, anS_goals, an4_dsYddts
 
 
-class HandMadeIntersectionRightTurnSouthEastParallel(IntersectionSceneBase):
-    """手写右转场景：agent 从南路右转到东路，动态障碍车从北路平行驶入。
+class HandMadeIntersectionStraightWestEastUFTSTC(IntersectionSceneBase):
+    """确定直行场景：agent 从西路南侧第 0 车道直行到东路。
 
-    ==================================================
-                 北路
-                  □ dynamic obstacle
-                  |
-                  |
-    西路 ----------+-----> reference / 东路
-                  ♦ static obstacle
-                  |
-             ego ■
-                 南路
-    ==================================================
+    agent 初始速度 80km/h；生成区/驶离区参考速度 90km/h，路口区 40km/h。
+    静态障碍车固定在西路靠近转向区的过渡区，动态障碍车从南路中间车道驶向北路。
     """
 
     @property
     def name(self) -> str:
-        return "handmade_intersection_right_turn_south_to_east_parallel_obstacle"
+        return "handmade_uftstc_straight_west_to_east"
 
     def make(self) -> Tuple[AgentState, ObstState, PathRefs, jnp.ndarray]:
-        start_road_idx = jnp.array(0, dtype=jnp.int32)
-        turn_sign = jnp.array(-1, dtype=jnp.int32)
+        start_road_idx = jnp.array(3, dtype=jnp.int32)
         lane_offset = jnp.array(3.0, dtype=jnp.float32)
         decel_len = jnp.array(50.0, dtype=jnp.float32)
-        gen_speed = jnp.array(80.0, dtype=jnp.float32)
-        turn_speed = jnp.array(35.0, dtype=jnp.float32)
-        anS_goals, an4_dsYddts = generate_turn_path_points(
-            self.num_agents, self.num_ref_points, start_road_idx, turn_sign,
-            lane_offset, decel_len, gen_speed, turn_speed
+        gen_speed = jnp.array(90.0, dtype=jnp.float32)
+        crossing_speed = jnp.array(40.0, dtype=jnp.float32)
+        anS_goals, an4_dsYddts = generate_straight_path_points(
+            self.num_agents, self.num_ref_points, start_road_idx, lane_offset,
+            decel_len, gen_speed, crossing_speed
         )
 
-        agent_r = jnp.array(-82.0, dtype=jnp.float32)
-        agent_speed = jnp.array(85.0, dtype=jnp.float32)
+        agent_r = jnp.array(-90.0, dtype=jnp.float32)
+        agent_speed = jnp.array(80.0, dtype=jnp.float32)
         aS_agent_state = _fixed_agent_states(self.num_agents, start_road_idx, agent_r, lane_offset, agent_speed)
 
-        S_sobst_state = _fixed_static_obstacle_from_ref(
-            anS_goals, int((ROAD_HALF + 18.0) / POINT_INTERVAL),
-            jnp.array([0.0, -0.5], dtype=jnp.float32),
+        sobst_xy = _road_point(start_road_idx, jnp.array(-35.0, dtype=jnp.float32), lane_offset)
+        S_sobst_state = _state_xy_speed_theta(
+            sobst_xy,
             jnp.array(0.0, dtype=jnp.float32),
+            ROAD_THETAS_DEG[start_road_idx],
         )
 
-        avg_speed_mps = ((agent_speed + turn_speed) * 0.5) / 3.6
+        avg_speed_mps = ((agent_speed + crossing_speed) * 0.5) / 3.6
         t_to_turn = (-TURN_HALF - agent_r) / avg_speed_mps
-        obst_road_idx = jnp.array(2, dtype=jnp.int32)
+        obst_road_idx = jnp.array(0, dtype=jnp.int32)
         obst_lane_offset = jnp.array(0.0, dtype=jnp.float32)
-        conflict_xy = _road_point(start_road_idx, -TURN_HALF, lane_offset)
+        conflict_xy = _road_point(obst_road_idx, jnp.array(0.0, dtype=jnp.float32), obst_lane_offset)
         S_mobst_state = _fixed_dynamic_obstacle_to_conflict(
-            obst_road_idx, obst_lane_offset, jnp.array(65.0, dtype=jnp.float32), conflict_xy, t_to_turn
+            obst_road_idx,
+            obst_lane_offset,
+            jnp.array(60.0, dtype=jnp.float32),
+            conflict_xy,
+            t_to_turn,
         )
         oS_obst_state = jnp.stack([S_sobst_state, S_mobst_state], axis=0)
         return aS_agent_state, oS_obst_state, anS_goals, an4_dsYddts
@@ -852,13 +802,10 @@ def gen_handmade_scene(key: PRNGKey, num_agents: int, num_ref_points: int, xrang
                        lane_width: float, lane_centers: Array) -> Tuple[AgentState, ObstState, PathRefs, jnp.ndarray]:
     choose_key, scene_key = jr.split(key, 2)
     scene_list = [
-        HandMadeIntersectionStraightSouthNorth(
+        HandMadeIntersectionLeftTurnWestNorthUFTSTC(
             scene_key, num_agents, num_ref_points, xrange, yrange, lane_width, lane_centers
         ).make,
-        HandMadeIntersectionLeftTurnSouthWest(
-            scene_key, num_agents, num_ref_points, xrange, yrange, lane_width, lane_centers
-        ).make,
-        HandMadeIntersectionRightTurnSouthEastParallel(
+        HandMadeIntersectionStraightWestEastUFTSTC(
             scene_key, num_agents, num_ref_points, xrange, yrange, lane_width, lane_centers
         ).make,
     ]

@@ -188,7 +188,10 @@ class InforMARLLagr(InforMARL):
             np.random.shuffle(idx)
             rnn_chunk_ids = jnp.arange(rollout.dones.shape[1])
             rnn_chunk_ids = jnp.array(jnp.array_split(rnn_chunk_ids, rollout.dones.shape[1] // self.rnn_step))
-            batch_idx = jnp.array(jnp.array_split(idx, idx.shape[0] // (self.batch_size // rollout.dones.shape[1])))
+            envs_per_batch = max(1, self.batch_size // rollout.dones.shape[1])
+            if idx.shape[0] % envs_per_batch != 0:
+                envs_per_batch = max(d for d in range(1, envs_per_batch + 1) if idx.shape[0] % d == 0)
+            batch_idx = jnp.array(jnp.array_split(idx, idx.shape[0] // envs_per_batch))
             critic_train_state, cost_critic_train_state, policy_train_state, lagr, update_info = self.update_inner(
                 critic_train_state,
                 cost_critic_train_state,

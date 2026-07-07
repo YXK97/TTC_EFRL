@@ -109,8 +109,8 @@ class UFTSTCController_pid:
         self.delta_xoe = ao_delta_xoe
         ao_delta_ddxoe = (ao_delta_dxoe - self.delta_dxoe) / self.dt
         self.delta_dxoe = ao_delta_dxoe
-        jax.debug.print("obst_pos(O,2) = {}", o2_obst_pos)
-        jax.debug.print("delta_xoe for agent0 (O,) = {}", ao_delta_xoe[0])
+        #jax.debug.print("obst_pos(O,2) = {}", o2_obst_pos)
+        #jax.debug.print("delta_xoe for agent0 (O,) = {}", ao_delta_xoe[0])
         return ao_delta_xoe, ao_delta_dxoe, ao_delta_ddxoe
 
     @ft.partial(jax.jit, static_argnums=(0,))
@@ -312,7 +312,7 @@ class UFTSTCController_pid:
     @ft.partial(jax.jit, static_argnums=(0,))
     def calc_Psid_dPsid_ddPsid_metric(self, aS_agent_states: AgentState, oS_obst_states: ObstState, a_deltaf: jnp.ndarray,
                                       a_Yd: jnp.ndarray, a_dYd: jnp.ndarray, a_ddYd: jnp.ndarray, a_dddYd: jnp.ndarray
-                                      ) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+                                      ) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
         # 计算每个障碍物与agent的误差，静态，动态，下边界，上边界
         A = aS_agent_states.shape[0]
         N = oS_obst_states.shape[0]
@@ -344,18 +344,15 @@ class UFTSTCController_pid:
         BD_AO = jnp.concatenate([ao_BD, BD_lane], axis=1)
 
         # [静态车, 动态车, y_min边界, y_max边界]
-        # w = jnp.array([0.7,1.1, 1.8, 1.5], dtype=BD_AO.dtype)  #
-        # w = jnp.array([0.7,0.5, 2, 1.5], dtype=BD_AO.dtype)  #
-        w = jnp.array([0.7,0, 0, 1], dtype=BD_AO.dtype)  #
+        w = jnp.array([0.6, 0.8, 0.5, 0.5], dtype=BD_AO.dtype) # intersection_straight
         BD_weighted_sum = jnp.sum(BD_AO * ao_bar_sgn_Ye * w[None, :], axis=1)
 
-        weight_obstacle = 1
-        weight_lane = 1
+        weight_obstacle = 0; weight_lane = 1 # intersection_straight
         a_BD_sum = (weight_obstacle * ao_BD.sum(axis=1)) + (weight_lane * BD_lane.sum(axis=1))
         a_dBD_sum = (weight_obstacle * ao_dBD.sum(axis=1)) + (weight_lane * dBD_lane.sum(axis=1))
         a_ddBD_sum = (weight_obstacle * ao_ddBD.sum(axis=1)) + (weight_lane * ddBD_lane.sum(axis=1))
 
-        ao_BD_int = self.integrate_BD_update(ao_BD,delta_xoe)
+        ao_BD_int = self.integrate_BD_update(ao_BD, delta_xoe)
         a_BD_int_sum = ao_BD_int.sum(axis=1)
         # ===== [ADD] lane boundary terms =====
         # a_BD_int_sum = a_BD_int_sum + a_BD_int_sum_lane
@@ -363,13 +360,14 @@ class UFTSTCController_pid:
         # a_Psid_metric = self.k1*jnp.exp(-self.v*a_BD_sum)*a_Ye/a_vx - self.k2*a_BD_sum*a_sgn_Ye/((a_BD_int_sum+1)*a_vx) \
         #               +a_dYd/a_vx*0.6 - a_beta*0.1
         # 人工调整的系数
-        BD_control  = jnp.where(X <= -100, 0,
-                                jnp.where(X <= 50, 1, 0))
+        BD_control  = jnp.where(X <= -100, 0, jnp.where(X <= 3, 1, 0)) # intersection_straight
+        #BD_control = 1
 
         a_Psid_metric = self.k1*jnp.exp(-self.v*BD_control*a_BD_sum)*a_Ye/a_vx - self.k2*BD_control*BD_weighted_sum/((a_BD_int_sum+1)*a_vx) \
                         +a_dYd/a_vx*0.5 - a_beta*0
         a_Psid_metric=jnp.clip(a_Psid_metric,-jnp.pi/2, jnp.pi/2)
         self.cur_step += 1
+        """
         jax.debug.print("step:{cur_step} \n"
                         "a_Psid:{a_Psid} \n"
                         "ao_BD={ao_BD} \n"
@@ -381,8 +379,9 @@ class UFTSTCController_pid:
                         ao_BD=ao_BD,
                         bd_lane=BD_lane,
                         Uod=Uod)
+        """
 
-        return a_Psid_metric,ao_BD, BD_lane ,a_Ye ,BD_weighted_sum
+        return a_Psid_metric, ao_BD, BD_lane, a_Ye, BD_weighted_sum
 
 
     @ft.partial(jax.jit, static_argnums=(0,))
@@ -411,7 +410,7 @@ class UFTSTCController_pid:
         return (ang + jnp.pi) % (2*jnp.pi) - jnp.pi
 
     @ft.partial(jax.jit, static_argnums=(0,))
-    def calc_deltaf(self, graph: GraphsTuple, a4_dsYddt: jnp.ndarray)-> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray,jnp.ndarray, jnp.ndarray , jnp.ndarray, jnp.ndarray,jnp.ndarray, jnp.ndarray , jnp.ndarray]:
+    def calc_deltaf(self, graph: GraphsTuple, a4_dsYddt: jnp.ndarray):
         aS_agent_states = graph.type_states(MVE.AGENT, n_type=self.num_agents)
         oS_obst_states  = graph.type_states(MVE.OBST,  n_type=self.num_obsts)
         T_goal_states  = graph.type_states(MVE.GOAL,  n_type=self.num_agents)

@@ -14,7 +14,12 @@ from matplotlib.patches import FancyArrow
 
 from .mve import MVE, MVEEnvState, MVEEnvGraphsTuple
 from .mve_lanechangeANDovertake import MVELaneChangeAndOverTake
-from .designed_scene_gen_intersection import gen_scene_randomly, gen_handmade_scene
+from .designed_scene_gen_intersection import (
+    HandMadeIntersectionLeftTurnWestNorthUFTSTC,
+    HandMadeIntersectionStraightWestEastUFTSTC,
+    gen_scene_randomly,
+    gen_handmade_scene,
+)
 from defmarl.trainer.data import Rollout
 from defmarl.utils.graph import GraphsTuple
 from defmarl.utils.typing import Array, AgentState, ObstState, Cost
@@ -98,12 +103,23 @@ class MVEIntersection(MVELaneChangeAndOverTake):
         lane_width = self.params["lane_width"]
         lane_centers = self.params["lane_centers"]
 
-        agents, obsts, all_goals, all_dsYddts = gen_scene_randomly(
-            key, self.num_agents, self.num_goals, xrange, yrange, lane_width, lane_centers
-        )
-        # agents, obsts, all_goals, all_dsYddts = gen_handmade_scene(
-        #     key, self.num_agents, self.num_goals, xrange, yrange, lane_width, lane_centers
-        # )
+        scene_mode = self.params.get("scene_mode", "random")
+        if scene_mode == "handmade":
+            agents, obsts, all_goals, all_dsYddts = gen_handmade_scene(
+                key, self.num_agents, self.num_goals, xrange, yrange, lane_width, lane_centers
+            )
+        elif scene_mode == "uftstc_left":
+            agents, obsts, all_goals, all_dsYddts = HandMadeIntersectionLeftTurnWestNorthUFTSTC(
+                key, self.num_agents, self.num_goals, xrange, yrange, lane_width, lane_centers
+            ).make()
+        elif scene_mode == "uftstc_straight":
+            agents, obsts, all_goals, all_dsYddts = HandMadeIntersectionStraightWestEastUFTSTC(
+                key, self.num_agents, self.num_goals, xrange, yrange, lane_width, lane_centers
+            ).make()
+        else:
+            agents, obsts, all_goals, all_dsYddts = gen_scene_randomly(
+                key, self.num_agents, self.num_goals, xrange, yrange, lane_width, lane_centers
+            )
         self.all_goals = all_goals
         self.all_dsYddts = all_dsYddts
         goals_init_indices = find_closest_goal_indices(agents, all_goals)

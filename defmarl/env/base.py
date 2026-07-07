@@ -125,7 +125,7 @@ class MultiAgentEnv(ABC):
         pass
 
     @abstractmethod
-    def step(self, graph: GraphsTuple, action: Action, get_eval_info: bool = False) -> StepResult:
+    def step(self, graph: GraphsTuple, action: Action, get_eval_info: bool = False):
         pass
 
     @abstractmethod

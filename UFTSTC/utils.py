@@ -79,7 +79,7 @@ def eval_rollout_uftstc(
                  a_ax, a_deltaf, a_Psid_metric, ao_BD, BD_lane, a_Ye ,aS_agent_states , oS_obst_states , a_Yd , T_goal_states,BD_weighted_sum))
 
     _, (graphs, actions , action_sums , rnn_states, rewards, costs, costs_real, dones, log_pis, next_graphs, dsYddts, \
-        a_axs, a_deltafs, a_Psid_metrics, ao_BDs, BD_lanes, a_Yes, aS_agent_statess , oS_obst_statess , a_Yds , T_goal_statess,BD_weighted_sums) = (
+        a_axs, a_deltafs, a_Psid_metrics, ao_BDs, BD_lanes, a_Yes, aS_agent_statess, oS_obst_statess , a_Yds , T_goal_statess, BD_weighted_sums) = (
         jax.lax.scan(body,
                      (init_graph, init_dsYddt),
                      None,

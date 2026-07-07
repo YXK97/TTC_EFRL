@@ -53,6 +53,8 @@ def test(args):
         reward_min=config.reward_min if args.reward_min is None else args.reward_min,
         reward_max=config.reward_max if args.reward_max is None else args.reward_max
     )
+    if args.scene_mode is not None:
+        env.params["scene_mode"] = args.scene_mode
 
     path = args.path
     model_path = os.path.join(path, "models")
@@ -133,29 +135,46 @@ def test(args):
         key_x0, _ = jr.split(test_keys[i_epi], 2)
         rollout: Rollout = rollout_fn(key_x0)
 
-        T_graph = rollout.graph
-        T = T_graph.states.shape[0]
-        positions = []
+        if args.output_csv:
+            T_graph = rollout.graph
+            T = T_graph.states.shape[0]
+            agent_states = []
+            goal_states = []
+            obst_states = []
 
-        for t in range(T):
-            graph_t = jax.tree_util.tree_map(lambda x: x[t], T_graph)
-            agent_states_t = graph_t.type_states(type_idx=MVE.AGENT, n_type=env.num_agents)
-            positions.append(agent_states_t[:, :2])
-
-        positions = jnp.stack(positions)  # shape: (T, N, 2)
-        T, N, _ = positions.shape
-
-        # 保存 CSV
-        pos_dir = os.path.join(args.path, "agent_positions_correct")
-        os.makedirs(pos_dir, exist_ok=True)
-        csv_path = os.path.join(pos_dir, f"epi{i_epi:02d}_positions.csv")
-        with open(csv_path, "w") as f:
-            f.write("time_step,agent_id,x,y\n")
             for t in range(T):
-                for n in range(N):
-                    x, y = positions[t, n]
-                    f.write(f"{t},{n},{x:.6f},{y:.6f}\n")
-        print(f"csv保存位置: {csv_path}")
+                graph_t = jax.tree_util.tree_map(lambda x: x[t], T_graph)
+                agent_states.append(graph_t.type_states(type_idx=MVE.AGENT, n_type=env.num_agents))
+                goal_states.append(graph_t.type_states(type_idx=MVE.GOAL, n_type=env.num_agents))
+                obst_states.append(graph_t.type_states(type_idx=MVE.OBST, n_type=env.num_obsts))
+
+            agent_states = jnp.stack(agent_states)
+            goal_states = jnp.stack(goal_states)
+            obst_states = jnp.stack(obst_states)
+
+            state_dir = os.path.join(args.path, "state_csv")
+            os.makedirs(state_dir, exist_ok=True)
+
+            def save_entity_csv(states, entity_name, entity_id):
+                csv_path = os.path.join(state_dir, f"{stamp_str}_epi{i_epi:02d}_{entity_name}{entity_id:02d}_states.csv")
+                state_dim = states.shape[-1]
+                state_cols = [f"s{i}" for i in range(state_dim)]
+                with open(csv_path, "w") as f:
+                    f.write(",".join(["time_step"] + state_cols) + "\n")
+                    for t in range(states.shape[0]):
+                        values = ",".join(f"{float(v):.6f}" for v in states[t, entity_id])
+                        f.write(f"{t},{values}\n")
+                return csv_path
+
+            csv_paths = []
+            for agent_id in range(agent_states.shape[1]):
+                csv_paths.append(save_entity_csv(agent_states, "agent", agent_id))
+            for goal_id in range(goal_states.shape[1]):
+                csv_paths.append(save_entity_csv(goal_states, "goal", goal_id))
+            for obst_id in range(obst_states.shape[1]):
+                csv_paths.append(save_entity_csv(obst_states, "obst", obst_id))
+            for csv_path in csv_paths:
+                print(f"csv保存位置: {csv_path}")
         
         is_unsafes.append(jnp.any(rollout.costs_real >= 1e-6, axis=-1))
         epi_reward = rollout.rewards.sum()
@@ -218,11 +237,14 @@ def main():
     parser.add_argument("--max-step", type=int, default=None)
     parser.add_argument("--stochastic", action="store_true", default=False)
     parser.add_argument("--log", action="store_true", default=False)
+    parser.add_argument("--output-csv", action="store_true", default=False)
     parser.add_argument("--seed", type=int, default=1234)
     parser.add_argument("--debug", action="store_true", default=False)
     parser.add_argument("--dpi", type=int, default=100)
     parser.add_argument("-z", type=str, default=None)
     parser.add_argument("--area-size", type=parse_jax_array, default=None)
+    parser.add_argument("--scene-mode", type=str, default=None,
+                        choices=["random", "handmade", "uftstc_left", "uftstc_straight"])
     parser.add_argument("--offset", type=int, default=0)
     parser.add_argument("--visible-devices", type=str, default=None)
 

@@ -1356,14 +1356,14 @@ def gen_handmade_scene(key: PRNGKey, num_agents: int, num_ref_points: int, xrang
                                 lane_width: float, lane_centers: Array) -> Tuple[AgentState, ObstState, PathRefs, jnp.ndarray]:
     choose_key, scene_key = jr.split(key, 2)
     scene_list = [
-        HandMadeSceneLaneChange2LaneFastMoving(scene_key, num_agents, num_ref_points, xrange, yrange, lane_width, lane_centers).make,
+        # HandMadeSceneLaneChange2LaneFastMoving(scene_key, num_agents, num_ref_points, xrange, yrange, lane_width, lane_centers).make,
         # HandMadeSceneLaneChangeMiddleStaticEdgeFastMoving_new(scene_key, num_agents, num_ref_points, xrange, yrange, lane_width, lane_centers).make, # Scenario I
         # HandMadeSceneLaneChangeMiddleStaticEdgeFastMoving(scene_key, num_agents, num_ref_points, xrange, yrange, lane_width, lane_centers).make, # Scenario I
         # HandMadeSceneLaneChangeMiddleStaticEdgeSlowMoving(scene_key, num_agents, num_ref_points, xrange, yrange, lane_width, lane_centers).make, # Scenario II
         # HandMadeSceneLaneChangeEdgeStaticMiddleFastMoving(scene_key, num_agents, num_ref_points, xrange, yrange, lane_width, lane_centers).make,
         # HandMadeSceneLaneChangeEdgeStaticMiddleSlowMoving(scene_key, num_agents, num_ref_points, xrange, yrange, lane_width, lane_centers).make,
-        #  HandMadeSceneOvertakeEdgeStaticMiddleFastMoving(scene_key, num_agents, num_ref_points, xrange, yrange, lane_width, lane_centers).make, # Scenario III
-        # HandMadeSceneOvertakeEdgeStaticMiddleSlowMoving(scene_key, num_agents, num_ref_points, xrange, yrange, lane_width, lane_centers).make, # Scenario IV
+        # HandMadeSceneOvertakeEdgeStaticMiddleFastMoving(scene_key, num_agents, num_ref_points, xrange, yrange, lane_width, lane_centers).make, # Scenario III
+        HandMadeSceneOvertakeEdgeStaticMiddleSlowMoving(scene_key, num_agents, num_ref_points, xrange, yrange, lane_width, lane_centers).make, # Scenario IV
     ]
     choose_id = jr.choice(choose_key, len(scene_list))
     aS_agent_state, oS_obst_state, anS_goals, an4_dsYddts = jax.lax.switch(choose_id, scene_list)

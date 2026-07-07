@@ -70,6 +70,7 @@ class DDPGLagr(DDPG):
                 "ddpg/skipped_update": 1.0,
             }
 
+        lagr_before = self.lagr
         info_acc = None
         for _ in range(self.updates_per_iter):
             batch = self.replay.sample(self.batch_size, num_devices)
@@ -98,8 +99,25 @@ class DDPGLagr(DDPG):
             "replay/size": float(self.replay.length),
             "ddpg/skipped_update": 0.0,
         })
+        info_acc.update(self._lagr_log_info(lagr_before, self.lagr))
         self.iter_index += 1
         return info_acc
+
+    def _lagr_log_info(self, lagr_before: Array, lagr_after: Array) -> dict:
+        lagr_after = jax.device_get(lagr_after)
+        lagr_delta = lagr_after - jax.device_get(lagr_before)
+
+        info = {
+            "lagr/mean": float(lagr_after.mean()),
+            "lagr/min": float(lagr_after.min()),
+            "lagr/max": float(lagr_after.max()),
+            "lagr/delta_mean": float(lagr_delta.mean()),
+            "lagr/delta_abs_mean": float(jnp.abs(lagr_delta).mean()),
+            "lagr/delta_max": float(lagr_delta.max()),
+            "lagr/delta_min": float(lagr_delta.min()),
+        }
+
+        return info
 
     @ft.partial(jax.pmap, in_axes=(None, None, None, None, None, None, None, None, 0),
                 axis_name="n_gpu", static_broadcasted_argnums=(0,))
@@ -117,7 +135,9 @@ class DDPGLagr(DDPG):
         critic_state, safety_state, critic_info = self.update_critics(
             critic_state, safety_state, target_actor_params, target_critic_params, target_safety_params, batch
         )
-        actor_state, lagr, actor_info = self.update_actor(actor_state, critic_state, safety_state, lagr, batch)
+        actor_state, lagr, actor_info = self.update_actor(
+            actor_state, critic_state, safety_state, target_actor_params, target_safety_params, lagr, batch
+        )
         target_actor_params = optax.incremental_update(actor_state.params, target_actor_params, self.tau)
         target_critic_params = optax.incremental_update(critic_state.params, target_critic_params, self.tau)
         target_safety_params = optax.incremental_update(safety_state.params, target_safety_params, self.tau)
@@ -130,6 +150,8 @@ class DDPGLagr(DDPG):
             actor_state: TrainState,
             critic_state: TrainState,
             safety_state: TrainState,
+            target_actor_params: Params,
+            target_safety_params: Params,
             lagr: Array,
             batch: Rollout,
     ):
@@ -154,11 +176,22 @@ class DDPGLagr(DDPG):
         grad, grad_norm = compute_norm_and_clip(grad, self.max_grad_norm)
         actor_state = actor_state.apply_gradients(grads=grad)
 
-        # violation 由当前策略下 cost critic 的均值近似。
-        violation = jax.lax.pmean(safety_q.mean(axis=0), axis_name="n_gpu")
+        # DDPG 没有 PPO ratio，这里用一阶 TD cost advantage 近似 PPO-Lagr 中的 cost GAE：
+        #   violation ~= (1 - gamma) * Qc(s, mu(s)) + A_c(s, a)
+        #             ~= c + gamma * Qc_target(s', mu_target(s')) - gamma * Qc(s, mu(s))
+        costs = jnp.nan_to_num(batch.costs, nan=1e3, posinf=1e3, neginf=-1e3)
+        costs = jnp.maximum(costs, 0.0)
+        dones = batch.dones.astype(jnp.float32)
+        next_actions = self._batched_actor(target_actor_params, batch.next_graph, zs)
+        next_safety_q = self._batched_safety_q(target_safety_params, batch.next_graph, next_actions, zs)
+        cost_adv = costs + self.gamma * (1.0 - dones[:, None, None]) * next_safety_q - safety_q
+        violation = jax.lax.pmean(((1.0 - self.gamma) * safety_q + cost_adv).mean(axis=0), axis_name="n_gpu")
         lagr = nn.relu(lagr + self.lr_lagr * violation)
         info.update({
             "policy/mean_lagr": jax.lax.pmean(lagr.mean(), axis_name="n_gpu"),
+            "lagr/violation_mean": jax.lax.pmean(violation.mean(), axis_name="n_gpu"),
+            "lagr/violation_min": jax.lax.pmean(violation.min(), axis_name="n_gpu"),
+            "lagr/violation_max": jax.lax.pmean(violation.max(), axis_name="n_gpu"),
             "policy/has_nan": grad_has_nan,
             "policy/grad_norm": jax.lax.pmean(grad_norm, axis_name="n_gpu"),
         })

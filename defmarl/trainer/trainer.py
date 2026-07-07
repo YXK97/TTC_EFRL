@@ -56,8 +56,9 @@ class Trainer:
             if not os.path.exists(self.model_dir):
                 os.mkdir(self.model_dir)
 
-        wandb.login()
-        wandb.init(name=params['run_name'], project='defmarl', group=env.__class__.__name__, dir=self.log_dir)
+        if wandb.run is None:
+            wandb.login()
+            wandb.init(name=params['run_name'], project='defmarl', group=env.__class__.__name__, dir=self.log_dir)
 
         self.save_log = save_log
 
@@ -85,6 +86,20 @@ class Trainer:
         assert 'full_eval_interval' in params, 'full_eval_interval not found in params'
         assert params['full_eval_interval'] > 0, 'full_eval_interval must be positive'
         return True
+
+    @staticmethod
+    def _format_wandb_info(info: dict) -> dict:
+        formatted = {}
+        for key, value in info.items():
+            value = jax.device_get(value)
+            if isinstance(value, (jnp.ndarray, np.ndarray)):
+                value = np.asarray(value)
+                if value.shape == () or value.size == 1:
+                    value = value.item()
+            if isinstance(value, np.generic):
+                value = value.item()
+            formatted[key] = value
+        return formatted
 
     def train(self):
         # record start time
@@ -232,7 +247,7 @@ class Trainer:
                     "eval/unsafe_frac_zmin": float(unsafe_frac_zmin[0]),
                     "eval/unsafe_frac_zmin_real": float(unsafe_frac_zmin_real[0]),
                 })
-                wandb.log(eval_info, step=self.update_iters)
+                wandb.log(self._format_wandb_info(eval_info), step=self.update_iters)
 
             # save the model
             if self.save_log and iter % self.save_interval == 0:
@@ -245,7 +260,7 @@ class Trainer:
 
             # update the algorithm
             update_info = self.algo.update(rollouts, iter)
-            wandb.log(update_info, step=self.update_iters)
+            wandb.log(self._format_wandb_info(update_info), step=self.update_iters)
             self.update_iters += 1
 
             pbar.update(1)
