@@ -272,7 +272,7 @@ class LaneChangeMiddleStaticEdgeFastMoving2lane(LaneChangeANDOvertakeScene):
         terminal_y = self.lane_centers[terminal_lane]
         start_theta = terminal_theta = jnp.array([0.0])[0]
         start_v = terminal_v = jr.uniform(start_terminal_v_key, shape=(), dtype=jnp.float32,
-                                          minval=10, maxval=30) / 3.6
+                                          minval=20, maxval=40) / 3.6
         S_start_state = make_state(start_x, start_y, start_theta, start_v)
         S_terminal_state = make_state(terminal_x, terminal_y, terminal_theta, terminal_v)
         anS_goals, an4_dsYddts = generate_lanechange_path_points(self.xrange, self.num_agents, self.num_ref_points,
@@ -286,7 +286,7 @@ class LaneChangeMiddleStaticEdgeFastMoving2lane(LaneChangeANDOvertakeScene):
         a_agent_hx = jnp.repeat(jnp.cos(start_theta)[None], self.num_agents, axis=0)
         a_agent_hy = jnp.repeat(jnp.sin(start_theta)[None], self.num_agents, axis=0)
         a_agent_v = jr.uniform(agent_v_key, shape=(self.num_agents,), dtype=jnp.float32,
-                                minval=10, maxval=30) / 3.6
+                                minval=20, maxval=40) / 3.6
         a_agent_delta = jnp.zeros((self.num_agents,), dtype=jnp.float32)
         aS_agent_state = jnp.stack([a_agent_x, a_agent_y, a_agent_hx, a_agent_hy, a_agent_v, a_agent_delta], axis=1)
 
@@ -354,7 +354,7 @@ class OvertakeEdgeStaticMiddle2lane(LaneChangeANDOvertakeScene):
         start_theta = terminal_theta = jnp.array([0.0])[0]
         start_y = terminal_y = jr.choice(start_y_key, self.lane_centers[jnp.array([0, 1])], shape=())
         terminal_v = jr.uniform(start_terminal_v_key, shape=(), dtype=jnp.float32,
-                                 minval=10, maxval=30) / 3.6
+                                 minval=20, maxval=40) / 3.6
         anS_goals, an4_dsYddts = generate_horizontal_path_points(self.xrange, self.num_agents, self.num_ref_points,
                                                                  start_y, terminal_v)
 
@@ -366,7 +366,7 @@ class OvertakeEdgeStaticMiddle2lane(LaneChangeANDOvertakeScene):
         a_agent_hx = jnp.repeat(jnp.cos(start_theta)[None], self.num_agents, axis=0)
         a_agent_hy = jnp.repeat(jnp.sin(start_theta)[None], self.num_agents, axis=0)
         a_agent_v = jr.uniform(agent_v_key, shape=(self.num_agents,), dtype=jnp.float32,
-                                minval=10, maxval=30) / 3.6
+                                minval=20, maxval=40) / 3.6
         a_agent_delta = jnp.zeros((self.num_agents,), dtype=jnp.float32)
         aS_agent_state = jnp.stack([a_agent_x, a_agent_y, a_agent_hx, a_agent_hy, a_agent_v, a_agent_delta], axis=1)
 

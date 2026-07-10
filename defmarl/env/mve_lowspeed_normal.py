@@ -32,7 +32,6 @@ class MVELaneChangeAndOverTake_LowSpeed(LowSpeedAccelMixin):
         "terminal_state_range": jnp.array([50.0, 100.0, -3.0, 3.0, -180.0, 180.0, -INF, INF, 0.0, INF, 0.0, INF, 0.0, INF]),
         "default_state_range": jnp.array([0.0, 100.0, -3.0, 3.0, -180.0, 180.0, -INF, INF, 0.0, INF, 0.0, INF, 0.0, INF]),
         "lane_width": 3,
-        "v_bias": 5,
         "alpha_thresh": 1.05,
         "delta_filter_alpha": 0.2,
         "max_delta": 0.2 * jnp.pi / 180.0,

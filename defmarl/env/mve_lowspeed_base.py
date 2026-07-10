@@ -171,7 +171,7 @@ class LowSpeedAccelMixin(MVE):
         agent = self._observable(graph.env_states.agent)
         goal = self._observable(graph.env_states.goal)
         e = agent - goal
-        W = jnp.diag(jnp.array([1e-2, 1e-2, 0, 0, 1e-3, 0]))
+        W = jnp.diag(jnp.array([1e-2, 1e-2, 0, 0, 1e-2, 0]))
         reward = -jnp.einsum("ai,ij,ja->a", e, W, e.transpose()).mean()
         reward -= (action[:, 0] ** 2).mean() * 0.01
         reward -= (action[:, 1] ** 2).mean() * 0.01
@@ -254,7 +254,7 @@ class LowSpeedAccelMixin(MVE):
         cost = jnp.stack([a_agent_cost, a_obst_cost, a_bound_low_cost, a_bound_high_cost], axis=1)
         cost_real = jnp.stack([a_agent_cost_real, a_obst_cost_real, a_bound_low_cost_real, a_bound_high_cost_real], axis=1)
         cost = jnp.where(cost <= 0.0, cost, cost + 1.0)
-        return jnp.clip(cost, a_min=-3.0), cost_real
+        return jnp.clip(cost, a_min=-10.0), cost_real
 
     def _cbf_cost(self, graph: GraphsTuple, action: Action) -> Tuple[Cost, Cost]:
         thresh = self.params["alpha_thresh"]
@@ -311,7 +311,7 @@ class LowSpeedAccelMixin(MVE):
         cost = jnp.stack([a_agent_cost, a_obst_cost, a_low_cost, a_high_cost], axis=1)
         cost_real = jnp.stack([a_agent_cost_real, a_obst_cost_real, a_low_real, a_high_real], axis=1)
         cost = jnp.where(cost <= 0.0, cost, cost + 1.0)
-        return jnp.clip(cost, a_min=-3.0, a_max=10.0), cost_real
+        return jnp.clip(cost, a_min=-10.0, a_max=10.0), cost_real
 
     def get_cost(self, graph: GraphsTuple, action: Optional[Action] = None) -> Tuple[Cost, Cost]:
         if self.use_cbf_cost:

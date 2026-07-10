@@ -56,7 +56,6 @@ class MVENormedGraph_CBF(MVE):
         0., 0., -INF, INF, -INF, INF]), # 随机生成terminal时的状态范围
 
         "lane_width": 3, # 车道宽度，m
-        "v_bias": 5, # 可允许的速度偏移量
         "alpha_thresh": 0.01,
         "gamma1": 3.,
         "gamma2": 3.

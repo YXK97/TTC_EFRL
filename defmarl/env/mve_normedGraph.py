@@ -58,7 +58,6 @@ class MVENormedGraph(MVE):
         -INF, INF, -INF, INF]), # 随机生成terminal时的状态范围
 
         "lane_width": 3, # 车道宽度，m
-        "v_bias": 5, # 可允许的速度偏移量
         "alpha_thresh": 1.4, # alpha大于thresh时才判定为安全，用于避障时让agent离obst不要那么近
     }
     PARAMS.update({
