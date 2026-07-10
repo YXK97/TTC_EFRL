@@ -215,9 +215,8 @@ def test(args):
     for ii, (rollout, Ta_is_unsafe) in enumerate(zip(rollouts, is_unsafes)):
         safe_rate = rates[ii] * 100
         video_name = f"n{num_agents}_epi{ii:02}_reward{rewards[ii]:.3f}_cost{costs[ii]:.3f}_sr{safe_rate:.0f}"
-        viz_opts = {}
         video_path = videos_dir / f"{stamp_str}_{video_name}.mp4"
-        env.render_video(rollout, video_path, Ta_is_unsafe, viz_opts, dpi=args.dpi)
+        env.render_video(rollout, video_path, Ta_is_unsafe, dpi=args.dpi)
 
 
 def main():

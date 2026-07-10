@@ -4,7 +4,7 @@ from defmarl.env.base import MultiAgentEnv
 from defmarl.env.mve_lanechangeANDovertake import MVELaneChangeAndOverTake
 from defmarl.env.mve_normedGraph import MVENormedGraph
 from defmarl.env.mve_normedGraph_CBF import MVENormedGraph_CBF
-from defmarl.env.mve_lowspeed import MVELaneChangeAndOverTake_LowSpeed
+from defmarl.env.mve_lowspeed_normal import MVELaneChangeAndOverTake_LowSpeed
 from defmarl.env.mve_lowspeed_CBF import MVELaneChangeAndOverTake_LowSpeed_CBF
 from defmarl.env.mve_lanechange_rsh import MVELaneChangeAndOverTake_RSH
 from defmarl.env.mve_lowspeed_bound import MVELaneChangeAndOverTake_LowSpeed_Bound
