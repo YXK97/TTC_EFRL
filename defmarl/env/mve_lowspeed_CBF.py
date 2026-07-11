@@ -2,8 +2,11 @@ from typing import Optional
 
 import jax.numpy as jnp
 
+from .designed_scene_gen_two_lane_split import gen_scene_randomly
+from .mve import MVEEnvState
 from .mve_lowspeed_base import LowSpeedAccelMixin
 from .utils import process_lane_centers
+from defmarl.utils.utils import find_closest_goal_indices
 
 
 INF = jnp.inf
@@ -65,3 +68,22 @@ class MVELaneChangeAndOverTake_LowSpeed_CBF(LowSpeedAccelMixin):
         self.all_goals = jnp.zeros((num_agents, self.num_goals, self.state_dim))
         self.all_dsYddts = jnp.zeros((num_agents, self.num_goals, 4))
         self.num_obsts = 0
+
+    def reset(self, key):
+        c_ycs = self.params["lane_centers"]
+        xrange = self.params["default_state_range"][:2]
+        yrange = self.params["default_state_range"][2:4]
+        lanewidth = self.params["lane_width"]
+        agents, obsts, all_goals, all_dsYddts = gen_scene_randomly(
+            key, self.num_agents, self.num_goals, xrange, yrange, lanewidth, c_ycs
+        )
+        obsts = obsts if obsts.shape[0] > 0 else jnp.empty((0, self.state_dim))
+        self.all_goals = all_goals
+        self.all_dsYddts = all_dsYddts
+        goals_init_indices = find_closest_goal_indices(self._observable(agents), self._observable(all_goals))
+        agents_indices = jnp.arange(agents.shape[0])
+        goals = all_goals[agents_indices, goals_init_indices, :]
+        dsYddts = all_dsYddts[agents_indices, goals_init_indices, :]
+        self.num_obsts = obsts.shape[0]
+        env_state = MVEEnvState(agents, goals, obsts)
+        return self.get_graph(env_state), dsYddts

@@ -522,7 +522,10 @@ class LowSpeedAccelMixin(MVE):
             return [col_edges, *agent_arrows, *agent_rects, *obst_arrows, *obst_rects, cost_text, safe_text, kk_text]
 
         ani = FuncAnimation(fig, update, frames=len(T_graph.n_node), interval=1000 / 30.0, blit=True)
-        save_anim(ani, video_path)
+        try:
+            save_anim(ani, video_path)
+        finally:
+            plt.close(fig)
 
     def plot_agent_speed_from_rollout(self, rollout: Rollout, record: Record, save_path=None, use_body_frame=False):
         T = len(rollout.graph.n_node)
