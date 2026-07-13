@@ -34,15 +34,18 @@ def make_env(
         max_travel: Optional[float] = None,
         num_obs: Optional[int] = None,
         reward_min: float = -20.0,
-        reward_max: float = 0.5
+        reward_max: float = 0.5,
+        comm_radius: Optional[float] = None
 ) -> MultiAgentEnv:
     assert env_id in ENV.keys(), f'Environment {env_id} not implemented.'
-    params = ENV[env_id].PARAMS
+    params = ENV[env_id].PARAMS.copy()
     if num_obs is not None:
         params['n_obsts'] = num_obs
     if full_observation:
         area_size = params['default_state_range'][:4] if area_size is None else area_size
         params['comm_radius'] = max(area_size) * 10
+    if comm_radius is not None:
+        params['comm_radius'] = comm_radius
     if max_step is None:
         return ENV[env_id](
             num_agents=num_agents,

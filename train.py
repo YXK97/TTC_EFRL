@@ -44,7 +44,8 @@ def train(args):
         full_observation=args.full_observation,
         area_size=args.area_size,
         reward_min=args.reward_min,
-        reward_max=args.reward_max
+        reward_max=args.reward_max,
+        comm_radius=args.comm_radius
     )
     env_test = make_env(
         env_id=args.env,
@@ -54,7 +55,8 @@ def train(args):
         full_observation=args.full_observation,
         area_size=args.area_size,
         reward_min=args.reward_min,
-        reward_max=args.reward_max
+        reward_max=args.reward_max,
+        comm_radius=args.comm_radius
     )
 
      # load config
@@ -250,6 +252,7 @@ def main():
     parser.add_argument("--max-step", type=int, default=None)
     parser.add_argument('--full-observation', action='store_true', default=False)
     parser.add_argument("--area-size", type=float, default=None)
+    parser.add_argument("--comm-radius", type=float, default=None)
 
     # training options
     parser.add_argument("--no-rnn", action="store_true", default=False)

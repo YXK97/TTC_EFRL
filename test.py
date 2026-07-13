@@ -43,6 +43,9 @@ def test(args):
             config = yaml.load(f, Loader=yaml.UnsafeLoader)
 
     num_agents = config.num_agents if args.num_agents is None else args.num_agents
+    comm_radius = args.comm_radius
+    if comm_radius is None and hasattr(config, "comm_radius"):
+        comm_radius = config.comm_radius
     env = make_env(
         env_id=config.env if args.env is None else args.env,
         num_agents=num_agents,
@@ -51,7 +54,8 @@ def test(args):
         full_observation=args.full_observation,
         area_size=config.area_size if args.area_size is None else args.area_size,
         reward_min=config.reward_min if args.reward_min is None else args.reward_min,
-        reward_max=config.reward_max if args.reward_max is None else args.reward_max
+        reward_max=config.reward_max if args.reward_max is None else args.reward_max,
+        comm_radius=comm_radius
     )
     if args.scene_mode is not None:
         env.params["scene_mode"] = args.scene_mode
@@ -155,72 +159,6 @@ def test(args):
             state_dir = os.path.join(args.path, "state_csv")
             os.makedirs(state_dir, exist_ok=True)
 
-            def infer_scene_info():
-                reset_key = jr.split(key_x0, 2)[0]
-                try:
-                    if env.__class__.__name__ != "MVELaneChangeAndOverTake_LowSpeed_CBF":
-                        raise RuntimeError("split scene metadata is only used for LowSpeed CBF")
-                    from defmarl.env.designed_scene_gen_two_lane_split import gen_scene_randomly as gen_split_scene
-                    agents0, obsts0, all_goals0, _ = gen_split_scene(
-                        reset_key,
-                        env.num_agents,
-                        env.num_goals,
-                        env.params["default_state_range"][:2],
-                        env.params["default_state_range"][2:4],
-                        env.params["lane_width"],
-                        env.params["lane_centers"],
-                    )
-                except Exception:
-                    agents0 = agent_states[0]
-                    obsts0 = obst_states[0]
-                    all_goals0 = goal_states.transpose((1, 0, 2))
-
-                agent0 = np.asarray(agents0[0])
-                obst0 = np.asarray(obsts0[0]) if np.asarray(obsts0).shape[0] > 0 else np.full((env.state_dim,), np.nan)
-                goals0 = np.asarray(all_goals0[0])
-                lane_centers = np.asarray(env.params["lane_centers"])
-                goal_y_span = float(np.nanmax(goals0[:, 1]) - np.nanmin(goals0[:, 1]))
-                scene_type = "lanechange" if goal_y_span > 0.5 else "overtake"
-                dx_obst_agent = float(obst0[0] - agent0[0])
-                agent_lane = int(np.nanargmin(np.abs(lane_centers - agent0[1]))) if np.isfinite(agent0[1]) else -1
-                obst_lane = int(np.nanargmin(np.abs(lane_centers - obst0[1]))) if np.isfinite(obst0[1]) else -1
-                terminal_goal_y = float(goals0[-1, 1])
-
-                if dx_obst_agent > 6.0:
-                    scene_phase = "Approach"
-                elif abs(dx_obst_agent) <= 6.0:
-                    scene_phase = "Side"
-                elif abs(float(agent0[1]) - terminal_goal_y) <= 0.35:
-                    scene_phase = "Done"
-                else:
-                    scene_phase = "Passed"
-
-                return {
-                    "episode": i_epi,
-                    "scene_type": scene_type,
-                    "scene_phase": scene_phase,
-                    "agent_x": float(agent0[0]),
-                    "agent_y": float(agent0[1]),
-                    "agent_lane": agent_lane,
-                    "obst_x": float(obst0[0]),
-                    "obst_y": float(obst0[1]),
-                    "obst_lane": obst_lane,
-                    "dx_obst_minus_agent": dx_obst_agent,
-                    "goal_y_start": float(goals0[0, 1]),
-                    "goal_y_end": terminal_goal_y,
-                    "goal_y_span": goal_y_span,
-                }
-
-            scene_info = infer_scene_info()
-            scene_csv_path = os.path.join(state_dir, f"{stamp_str}_scene_info.csv")
-            scene_header = list(scene_info.keys())
-            scene_file_exists = os.path.exists(scene_csv_path)
-            with open(scene_csv_path, "a") as f:
-                if not scene_file_exists:
-                    f.write(",".join(scene_header) + "\n")
-                f.write(",".join(str(scene_info[k]) for k in scene_header) + "\n")
-            print(f"scene信息保存位置: {scene_csv_path}, scene_type={scene_info['scene_type']}, phase={scene_info['scene_phase']}")
-
             def save_entity_csv(states, entity_name, entity_id):
                 csv_path = os.path.join(state_dir, f"{stamp_str}_epi{i_epi:02d}_{entity_name}{entity_id:02d}_states.csv")
                 state_dim = states.shape[-1]
@@ -308,6 +246,7 @@ def main():
     parser.add_argument("--dpi", type=int, default=100)
     parser.add_argument("-z", type=str, default=None)
     parser.add_argument("--area-size", type=parse_jax_array, default=None)
+    parser.add_argument("--comm-radius", type=float, default=None)
     parser.add_argument("--scene-mode", type=str, default=None,
                         choices=["random", "handmade", "uftstc_left", "uftstc_straight"])
     parser.add_argument("--offset", type=int, default=0)

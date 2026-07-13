@@ -2,7 +2,7 @@ from typing import Optional
 
 import jax.numpy as jnp
 
-from .designed_scene_gen_two_lane_split import gen_scene_randomly
+from .designed_scene_gen_two_lane_split import gen_scene_randomly_split
 from .mve import MVEEnvState
 from .mve_lowspeed_base import LowSpeedAccelMixin
 from .utils import process_lane_centers
@@ -29,10 +29,10 @@ class MVELaneChangeAndOverTake_LowSpeed_CBF(LowSpeedAccelMixin):
         "obst_bb_size": jnp.array([2.625, 1.647]),
         "obst_lr": 0.9025,
         "bound_bb_size": jnp.array([5.0, 1.0]),
-        "rollout_state_range": jnp.array([-5.0, 150.0, -10.0, 10.0, -1.0, 1.0, -1.0, 1.0]),
-        "agent_init_state_range": jnp.array([-100.0, -50.0, -3.7, 3.7, -180.0, 180.0, -INF, INF, 0.0, INF, 0.0, INF, 0.0, INF]),
-        "terminal_state_range": jnp.array([50.0, 100.0, -3.7, 3.7, -180.0, 180.0, -INF, INF, 0.0, INF, 0.0, INF, 0.0, INF]),
-        "default_state_range": jnp.array([0.0, 100.0, -3.7, 3.7, -180.0, 180.0, -INF, INF, 0.0, INF, 0.0, INF, 0.0, INF]),
+        "rollout_state_range": jnp.array([-5.0, 150.0, -10.0, 10.0]),
+        # "agent_init_state_range": jnp.array([-100.0, -50.0, -3.7, 3.7]),
+        # "terminal_state_range": jnp.array([50.0, 100.0, -3.7, 3.7]),
+        "default_state_range": jnp.array([0.0, 100.0, -3.7, 3.7]),
         "lane_width": 3.7,
         "alpha_thresh": 1.05,
         "delta_filter_alpha": 0.5,
@@ -40,7 +40,7 @@ class MVELaneChangeAndOverTake_LowSpeed_CBF(LowSpeedAccelMixin):
         "delta_abs_max": 10.0 * jnp.pi / 180.0,
         "min_accel": -5.0,
         "max_accel": 5.0,
-        "v_min": 5.0,
+        "v_min": 0.0,
         "v_max": 40.0 / 3.6,
         "gamma": 3.0,
     }
@@ -74,7 +74,7 @@ class MVELaneChangeAndOverTake_LowSpeed_CBF(LowSpeedAccelMixin):
         xrange = self.params["default_state_range"][:2]
         yrange = self.params["default_state_range"][2:4]
         lanewidth = self.params["lane_width"]
-        agents, obsts, all_goals, all_dsYddts = gen_scene_randomly(
+        agents, obsts, all_goals, all_dsYddts = gen_scene_randomly_split(
             key, self.num_agents, self.num_goals, xrange, yrange, lanewidth, c_ycs
         )
         obsts = obsts if obsts.shape[0] > 0 else jnp.empty((0, self.state_dim))
