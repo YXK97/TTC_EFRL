@@ -171,10 +171,10 @@ class LowSpeedAccelMixin(MVE):
         agent = self._observable(graph.env_states.agent)
         goal = self._observable(graph.env_states.goal)
         e = agent - goal
-        W = jnp.diag(jnp.array([5e-3, 5e-3, 0, 0, 5e-3, 0]))
+        W = jnp.diag(jnp.array([2e-3, 2e-3, 0, 0, 2e-3, 0]))
         reward = -jnp.einsum("ai,ij,ja->a", e, W, e.transpose()).mean()
-        reward -= (action[:, 0] ** 2).mean() * 0.005
-        reward -= (action[:, 1] ** 2).mean() * 0.005
+        reward -= (action[:, 0] ** 2).mean() * 0.002
+        reward -= (action[:, 1] ** 2).mean() * 0.002
         return reward
 
     def _scaling_cost(self, graph: GraphsTuple) -> Tuple[Cost, Cost]:

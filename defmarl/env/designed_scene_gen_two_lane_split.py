@@ -934,6 +934,7 @@ def gen_scene_randomly_split(key: PRNGKey, num_agents: int, num_ref_points: int,
         ).make,
     ]
     probs = jnp.array([0.075, 0.175, 0.1, 0.1, 0.050, 0.075, 0.175, 0.1, 0.1, 0.050])
+    # probs = jnp.array([0.5, 0, 0, 0, 0, 0.5, 0, 0, 0, 0]) # for eval
     choose_id = jr.choice(choose_key, len(scene_list), p=probs)
     aS_agent_state, oS_obst_state, anS_goals, an4_dsYddts = jax.lax.switch(choose_id, scene_list)
 
