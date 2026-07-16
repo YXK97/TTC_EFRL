@@ -1,5 +1,6 @@
 import functools as ft
 import pathlib
+from abc import abstractmethod
 from typing import List, Optional, Tuple
 
 import jax
@@ -11,7 +12,7 @@ from matplotlib.collections import LineCollection
 from matplotlib.patches import FancyArrow
 
 from .designed_scene_gen_two_lane import gen_scene_randomly
-from .mve import MVE, MVEEnvBoundState, MVEEnvState
+from .mve import MVE
 from .utils import process_lane_marks
 from defmarl.trainer.data import Record, Rollout
 from defmarl.utils.graph import EdgeBlock, GetGraph, GraphsTuple
@@ -30,9 +31,6 @@ class LowSpeedAccelMixin(MVE):
     State: [x, y, heading_x, heading_y, v, delta].
     Geometry parameters such as bw, bh, and lr are read from env params.
     """
-
-    includes_bound_nodes = False
-    use_cbf_cost = False
 
     @property
     def state_dim(self) -> int:
@@ -96,12 +94,13 @@ class LowSpeedAccelMixin(MVE):
         dsYddts = all_dsYddts[agents_indices, goals_init_indices, :]
         self.num_obsts = obsts.shape[0]
 
-        if self.includes_bound_nodes:
-            bounds = self.generate_bound(agents, self.params["bound_bb_size"])
-            env_state = MVEEnvBoundState(agents, goals, bounds, obsts)
-        else:
-            env_state = MVEEnvState(agents, goals, obsts)
+        env_state = self._create_env_state(agents, goals, obsts)
         return self.get_graph(env_state), dsYddts
+
+    @abstractmethod
+    def _create_env_state(self, agents: State, goals: State, obsts: State):
+        """Create the environment state required by the concrete graph type."""
+        raise NotImplementedError
 
     def generate_bound(self, agent_states: AgentState, bound_bb_size: Array) -> State:
         num_agents = agent_states.shape[0]
@@ -158,13 +157,9 @@ class LowSpeedAccelMixin(MVE):
         next_agent_states = self.agent_step_euler(env_state.agent, action)
         next_obst_states = self.obst_step_euler(env_state.obstacle)
         next_goal_states, next_dsYddts = self.goal_dsYddt_step(next_agent_states)
-        if self.includes_bound_nodes:
-            next_bounds = self.generate_bound(next_agent_states, self.params["bound_bb_size"])
-            next_env_state = MVEEnvBoundState(next_agent_states, next_goal_states, next_bounds, next_obst_states)
-        else:
-            next_env_state = MVEEnvState(next_agent_states, next_goal_states, next_obst_states)
+        next_env_state = self._create_env_state(next_agent_states, next_goal_states, next_obst_states)
         reward = self.get_reward(graph, action)
-        cost, cost_real = self.get_cost(graph, action) if self.use_cbf_cost else self.get_cost(graph)
+        cost, cost_real = self.get_cost(graph, action)
         return self.get_graph(next_env_state), next_dsYddts, reward, cost, cost_real, jnp.array(False), {}
 
     def get_reward(self, graph: GraphsTuple, action: Action) -> Reward:
@@ -203,122 +198,45 @@ class LowSpeedAccelMixin(MVE):
             a_obst_cost = jnp.max(thresh - alpha_matrix, axis=1)
             a_obst_cost_real = jnp.max(1 - alpha_matrix, axis=1)
 
-        if self.includes_bound_nodes:
-            agent_idx = jnp.arange(num_agents)
-            alpha_low = jax.vmap(scaling_calc, in_axes=(0, 0, None, None, None, None))(
-                agent_states,
-                graph.env_states.bound[agent_idx * 2],
-                self.params["ego_bb_size"],
-                self.params["ego_lr"],
-                self.params["bound_bb_size"],
-                0.0,
-            )
-            alpha_high = jax.vmap(scaling_calc, in_axes=(0, 0, None, None, None, None))(
-                agent_states,
-                graph.env_states.bound[agent_idx * 2 + 1],
-                self.params["ego_bb_size"],
-                self.params["ego_lr"],
-                self.params["bound_bb_size"],
-                0.0,
-            )
-            alpha_low = jnp.nan_to_num(alpha_low, nan=0.0, posinf=1e6, neginf=0.0)
-            alpha_high = jnp.nan_to_num(alpha_high, nan=0.0, posinf=1e6, neginf=0.0)
-            a_bound_low_cost = thresh - alpha_low
-            a_bound_high_cost = thresh - alpha_high
-            a_bound_low_cost_real = 1 - alpha_low
-            a_bound_high_cost_real = 1 - alpha_high
-        else:
-            yl = self.params["default_state_range"][2]
-            yh = self.params["default_state_range"][3]
-            alpha_low = jax.vmap(scaling_calc_bound, in_axes=(0, None, None, None, None))(
-                agent_states,
-                self.params["ego_bb_size"],
-                self.params["ego_lr"],
-                jnp.array([[0.0, 1.0]]),
-                jnp.array([yl]),
-            )
-            alpha_high = jax.vmap(scaling_calc_bound, in_axes=(0, None, None, None, None))(
-                agent_states,
-                self.params["ego_bb_size"],
-                self.params["ego_lr"],
-                jnp.array([[0.0, -1.0]]),
-                jnp.array([-yh]),
-            )
-            alpha_low = jnp.nan_to_num(alpha_low, nan=0.0, posinf=1e6, neginf=0.0)
-            alpha_high = jnp.nan_to_num(alpha_high, nan=0.0, posinf=1e6, neginf=0.0)
-            a_bound_low_cost = thresh - alpha_low
-            a_bound_high_cost = thresh - alpha_high
-            a_bound_low_cost_real = 1 - alpha_low
-            a_bound_high_cost_real = 1 - alpha_high
+        a_bound_low_cost, a_bound_high_cost, a_bound_low_cost_real, a_bound_high_cost_real = (
+            self._boundary_scaling_cost(graph, thresh)
+        )
 
         cost = jnp.stack([a_agent_cost, a_obst_cost, a_bound_low_cost, a_bound_high_cost], axis=1)
         cost_real = jnp.stack([a_agent_cost_real, a_obst_cost_real, a_bound_low_cost_real, a_bound_high_cost_real], axis=1)
         cost = jnp.where(cost <= 0.0, cost, cost + 1.0)
         return jnp.clip(cost, a_min=-10.0), cost_real
 
-    def _cbf_cost(self, graph: GraphsTuple, action: Action) -> Tuple[Cost, Cost]:
-        thresh = self.params["alpha_thresh"]
-        gamma = self.params["gamma"]
-        num_agents = graph.env_states.agent.shape[0]
-        num_obsts = graph.env_states.obstacle.shape[0]
-        action_delta = self._filter_delta(graph.env_states.agent[:, 5], action[:, 1])
+    @abstractmethod
+    def _boundary_scaling_cost(self, graph: GraphsTuple, thresh: Array):
+        """Return low/high boundary costs and their unthresholded values."""
+        raise NotImplementedError
 
-        def cbf_between(s1, s2, delta_rad, is_bound):
-            bb = self.params["bound_bb_size"] if is_bound else self.params["obst_bb_size"]
-            lr = 0.0 if is_bound else self.params["obst_lr"]
-
-            def alpha_fn(z):
-                full = jnp.array([z[0], z[1], z[2], z[3], s1[4], s1[5]])
-                return scaling_calc(full, s2, self.params["ego_bb_size"], self.params["ego_lr"], bb, lr)
-
-            z = s1[:4]
-            alpha, grad_z = jax.value_and_grad(alpha_fn)(z)
-            alpha = jnp.nan_to_num(alpha, nan=0.0, posinf=1e6, neginf=0.0)
-            grad_z = jnp.nan_to_num(grad_z, nan=0.0, posinf=0.0, neginf=0.0)
-            hvec = z[2:4] / jnp.maximum(jnp.linalg.norm(z[2:4]), EPS)
-            omega = s1[4] / self.params["ego_L"] * jnp.tan(delta_rad)
-            z_dot = jnp.array([s1[4] * hvec[0], s1[4] * hvec[1], -hvec[1] * omega, hvec[0] * omega])
-            cost = -(jnp.dot(grad_z, z_dot) + gamma * (alpha - thresh)) / gamma
-            cost = jnp.nan_to_num(cost, nan=10.0, posinf=10.0, neginf=-3.0)
-            return cost, 1 - alpha
-
-        a_agent_cost = -jnp.ones((num_agents,), dtype=jnp.float32) * 3.0
-        a_agent_cost_real = -jnp.ones((num_agents,), dtype=jnp.float32) * 3.0
-
-        if num_obsts == 0:
-            a_obst_cost = -jnp.ones((num_agents,), dtype=jnp.float32) * 3.0
-            a_obst_cost_real = -jnp.ones((num_agents,), dtype=jnp.float32) * 3.0
-        else:
-            i_pairs, j_pairs = gen_i_j_pairs(num_agents, num_obsts)
-            costs, reals = jax.vmap(cbf_between, in_axes=(0, 0, 0, None))(
-                graph.env_states.agent[i_pairs], graph.env_states.obstacle[j_pairs], action_delta[i_pairs], False
-            )
-            a_obst_cost = jnp.max(costs.reshape((num_agents, num_obsts)), axis=1)
-            a_obst_cost_real = jnp.max(reals.reshape((num_agents, num_obsts)), axis=1)
-
+    def _road_boundary_scaling_cost(self, graph: GraphsTuple, thresh: Array):
+        agent_states = graph.env_states.agent
         yl = self.params["default_state_range"][2]
         yh = self.params["default_state_range"][3]
-        bound_size = self.params.get("bound_bb_size", jnp.array([5.0, 1.0]))
-        lower = self.generate_bound(graph.env_states.agent, bound_size)[::2]
-        upper = self.generate_bound(graph.env_states.agent, bound_size)[1::2]
-        a_low_cost, a_low_real = jax.vmap(cbf_between, in_axes=(0, 0, 0, None))(
-            graph.env_states.agent, lower, action_delta, True
+        alpha_low = jax.vmap(scaling_calc_bound, in_axes=(0, None, None, None, None))(
+            agent_states,
+            self.params["ego_bb_size"],
+            self.params["ego_lr"],
+            jnp.array([[0.0, 1.0]]),
+            jnp.array([yl]),
         )
-        a_high_cost, a_high_real = jax.vmap(cbf_between, in_axes=(0, 0, 0, None))(
-            graph.env_states.agent, upper, action_delta, True
+        alpha_high = jax.vmap(scaling_calc_bound, in_axes=(0, None, None, None, None))(
+            agent_states,
+            self.params["ego_bb_size"],
+            self.params["ego_lr"],
+            jnp.array([[0.0, -1.0]]),
+            jnp.array([-yh]),
         )
+        alpha_low = jnp.nan_to_num(alpha_low, nan=0.0, posinf=1e6, neginf=0.0)
+        alpha_high = jnp.nan_to_num(alpha_high, nan=0.0, posinf=1e6, neginf=0.0)
+        return thresh - alpha_low, thresh - alpha_high, 1 - alpha_low, 1 - alpha_high
 
-        cost = jnp.stack([a_agent_cost, a_obst_cost, a_low_cost, a_high_cost], axis=1)
-        cost_real = jnp.stack([a_agent_cost_real, a_obst_cost_real, a_low_real, a_high_real], axis=1)
-        cost = jnp.where(cost <= 0.0, cost, cost + 1.0)
-        return jnp.clip(cost, a_min=-10.0, a_max=10.0), cost_real
-
-    def get_cost(self, graph: GraphsTuple, action: Optional[Action] = None) -> Tuple[Cost, Cost]:
-        if self.use_cbf_cost:
-            if action is None:
-                return self._scaling_cost(graph)
-            return self._cbf_cost(graph, action)
-        return self._scaling_cost(graph)
+    @abstractmethod
+    def get_cost(self, graph: GraphsTuple, action: Optional[Action]) -> Tuple[Cost, Cost]:
+        raise NotImplementedError
 
     def edge_blocks(self, state) -> List[EdgeBlock]:
         num_agents = state.agent.shape[0]
@@ -332,17 +250,8 @@ class LowSpeedAccelMixin(MVE):
             rel = self._observable(state.agent[i_agent][None, :])[0] - self._observable(state.goal[i_agent][None, :])[0]
             edges.append(EdgeBlock(rel[None, None, :], jnp.ones((1, 1)), jnp.array([i_agent]), jnp.array([i_agent + num_agents])))
 
-        if self.includes_bound_nodes:
-            num_bounds = state.bound.shape[0]
-            for i_agent in range(num_agents):
-                for offset in range(2):
-                    bound_id = 2 * i_agent + offset
-                    rel = self._observable(state.agent[i_agent][None, :])[0] - self._observable(state.bound[bound_id][None, :])[0]
-                    edges.append(EdgeBlock(rel[None, None, :], jnp.ones((1, 1)),
-                                           jnp.array([i_agent]), jnp.array([num_agents + num_goals + bound_id])))
-            obst_offset = num_agents + num_goals + num_bounds
-        else:
-            obst_offset = num_agents + num_goals
+        bound_edges, obst_offset = self._boundary_edge_blocks(state, num_agents + num_goals)
+        edges.extend(bound_edges)
 
         if num_obsts > 0:
             obs_obs = self._observable(state.obstacle)
@@ -354,12 +263,15 @@ class LowSpeedAccelMixin(MVE):
             edges.append(EdgeBlock(rel, mask, id_agent, jnp.arange(num_obsts) + obst_offset))
         return edges
 
+    @abstractmethod
+    def _boundary_edge_blocks(self, state, node_offset: int) -> Tuple[List[EdgeBlock], int]:
+        raise NotImplementedError
+
     def get_graph(self, env_state, obst_as_agent: bool = False) -> GraphsTuple:
         num_agents = env_state.agent.shape[0]
         num_goals = env_state.goal.shape[0]
         num_obsts = env_state.obstacle.shape[0]
-        num_bounds = env_state.bound.shape[0] if self.includes_bound_nodes else 0
-        total = num_agents + num_goals + num_bounds + num_obsts
+        total = num_agents + num_goals + self._num_boundary_nodes(env_state) + num_obsts
         node_feats = jnp.zeros((total, self.node_dim))
         node_type = -jnp.ones((total,), dtype=jnp.int32)
 
@@ -371,11 +283,7 @@ class LowSpeedAccelMixin(MVE):
         node_feats = node_feats.at[num_agents:num_agents + num_goals, -2].set(1.0)
 
         cursor = num_agents + num_goals
-        if self.includes_bound_nodes:
-            node_feats = node_feats.at[cursor:cursor + num_bounds, :self.state_dim].set(self._observable(env_state.bound))
-            node_feats = node_feats.at[cursor:cursor + num_bounds, -3].set(1.0)
-            node_type = node_type.at[cursor:cursor + num_bounds].set(MVE.BOUND)
-            cursor += num_bounds
+        node_feats, node_type, cursor = self._add_boundary_nodes(node_feats, node_type, env_state, cursor)
         if num_obsts > 0:
             node_feats = node_feats.at[cursor:, :self.state_dim].set(self._observable(env_state.obstacle))
             node_feats = node_feats.at[cursor:, -3].set(1.0)
@@ -383,6 +291,14 @@ class LowSpeedAccelMixin(MVE):
 
         states = node_feats[:, :self.state_dim]
         return GetGraph(node_feats, node_type, self.edge_blocks(env_state), env_state, states).to_padded()
+
+    @abstractmethod
+    def _num_boundary_nodes(self, env_state) -> int:
+        raise NotImplementedError
+
+    @abstractmethod
+    def _add_boundary_nodes(self, node_feats: Array, node_type: Array, env_state, cursor: int):
+        raise NotImplementedError
 
     def clip_internal_state(self, state: State) -> State:
         x_l, x_h = self.params["rollout_state_range"][0], self.params["rollout_state_range"][1]
@@ -422,7 +338,7 @@ class LowSpeedAccelMixin(MVE):
 
     @ft.partial(jax.jit, static_argnums=(0,))
     def unsafe_mask(self, graph: GraphsTuple) -> Array:
-        _, cost_real = self.get_cost(graph)
+        _, cost_real = self._scaling_cost(graph)
         return jnp.any(cost_real >= 0.0, axis=-1)
 
     def _plot_pose(self, ax, states, bb_size, lr, color, zorder):

@@ -1,9 +1,13 @@
-from typing import Optional
+from typing import Optional, Tuple
 
 import jax.numpy as jnp
+from typing_extensions import override
 
+from .mve import MVEEnvState
 from .mve_lowspeed_base import LowSpeedAccelMixin
 from .utils import process_lane_centers
+from defmarl.utils.graph import GraphsTuple
+from defmarl.utils.typing import Action, Array, Cost, State
 
 
 INF = jnp.inf
@@ -65,3 +69,31 @@ class MVELaneChangeAndOverTake_LowSpeed(LowSpeedAccelMixin):
         self.all_goals = jnp.zeros((num_agents, self.num_goals, self.state_dim))
         self.all_dsYddts = jnp.zeros((num_agents, self.num_goals, 4))
         self.num_obsts = 0
+
+    @override
+    def _create_env_state(self, agents: State, goals: State, obsts: State) -> MVEEnvState:
+        return MVEEnvState(agents, goals, obsts)
+
+    @override
+    def _boundary_scaling_cost(self, graph: GraphsTuple, thresh: Array):
+        return self._road_boundary_scaling_cost(graph, thresh)
+
+    @override
+    def get_cost(self, graph: GraphsTuple, action: Optional[Action] = None) -> Tuple[Cost, Cost]:
+        del action
+        return self._scaling_cost(graph)
+
+    @override
+    def _boundary_edge_blocks(self, state, node_offset: int):
+        del state
+        return [], node_offset
+
+    @override
+    def _num_boundary_nodes(self, env_state: MVEEnvState) -> int:
+        del env_state
+        return 0
+
+    @override
+    def _add_boundary_nodes(self, node_feats: Array, node_type: Array, env_state: MVEEnvState, cursor: int):
+        del env_state
+        return node_feats, node_type, cursor
