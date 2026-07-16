@@ -18,3 +18,5 @@ ros2_bag/
 # UFTSTC related
 UFTSTC/videos/
 UFTSTC/csv/
+UFTSTC_intersection/videos/
+UFTSTC_intersection/csv/
