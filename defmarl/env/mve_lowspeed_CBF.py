@@ -35,7 +35,7 @@ class MVELaneChangeAndOverTake_LowSpeed_CBF(LowSpeedAccelMixin):
         "rollout_state_range": jnp.array([-5.0, 150.0, -10.0, 10.0]),
         # "agent_init_state_range": jnp.array([-100.0, -50.0, -3.7, 3.7]),
         # "terminal_state_range": jnp.array([50.0, 100.0, -3.7, 3.7]),
-        "default_state_range": jnp.array([0.0, 100.0, -3.7, 3.7]),
+        "default_state_range": jnp.array([0.0, 130.0, -3.7, 3.7]),
         "lane_width": 3.7,
         "alpha_thresh": 1.05,
         "delta_filter_alpha": 0.5,

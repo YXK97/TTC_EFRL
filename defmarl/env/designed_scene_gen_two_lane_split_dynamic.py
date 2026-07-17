@@ -1,4 +1,3 @@
-import functools as ft
 from typing import Tuple
 
 import jax
@@ -13,8 +12,8 @@ from .designed_scene_gen_two_lane_split import (
 from defmarl.utils.typing import AgentState, Array, ObstState, PathRefs, PRNGKey
 
 
-DYNAMIC_OBST_ACCEL = 3.0
-DYNAMIC_OBST_TARGET_SPEED = 30.0 / 3.6
+DYNAMIC_OBST_ACCEL_RANGE = (0.1, 7.0)
+DYNAMIC_OBST_MAX_SPEED_RANGE_KMH = (10.0, 60.0)
 
 _EGO_NOMINAL_ACCEL = 2.0
 _INITIAL_LONGITUDINAL_GAP = 10.0
@@ -61,21 +60,29 @@ def _make_reference(
         maxval=xrange[1],
     )
     start_lane = jr.choice(lane_key, jnp.array([0, 1], dtype=jnp.int32), shape=())
-    terminal_lane = 1 - start_lane if lane_change else start_lane
+    terminal_lane = jnp.where(lane_change, 1 - start_lane, start_lane)
     start_y = lane_centers[start_lane]
     terminal_y = lane_centers[terminal_lane]
     terminal_v = jr.uniform(speed_key, shape=(), dtype=jnp.float32, minval=20.0, maxval=40.0) / 3.6
 
-    if lane_change:
+    def make_lane_change_reference(_):
         start = make_state(start_x, start_y, jnp.array(0.0), terminal_v)
         terminal = make_state(terminal_x, terminal_y, jnp.array(0.0), terminal_v)
-        goals, derivatives = generate_lanechange_path_points(
+        return generate_lanechange_path_points(
             xrange, num_agents, num_ref_points, start, terminal
         )
-    else:
-        goals, derivatives = generate_horizontal_path_points(
+
+    def make_overtake_reference(_):
+        return generate_horizontal_path_points(
             xrange, num_agents, num_ref_points, start_y, terminal_v
         )
+
+    goals, derivatives = jax.lax.cond(
+        lane_change,
+        make_lane_change_reference,
+        make_overtake_reference,
+        operand=None,
+    )
 
     return start_x, start_y, terminal_y, terminal_v, goals, derivatives
 
@@ -114,19 +121,22 @@ def _make_agents(
     x_key, y_key, speed_key = jr.split(key, 3)
     side_y = lane_centers[1 - static_lane]
 
-    if phase == _START:
+    def make_start(_):
         agent_x = jr.uniform(x_key, shape=(), dtype=jnp.float32, minval=xrange[0], maxval=start_x)
-        agent_y = start_y
         agent_v = jnp.zeros((num_agents,), dtype=jnp.float32)
-    elif phase == _APPROACH:
+        return agent_x, start_y, agent_v, y_key
+
+    def make_approach(_):
         agent_x = static_x - jr.uniform(x_key, shape=(), dtype=jnp.float32, minval=18.0, maxval=32.0)
-        agent_y = start_y
         agent_v = jr.uniform(speed_key, (num_agents,), dtype=jnp.float32, minval=0.0, maxval=40.0) / 3.6
-    elif phase == _SIDE:
+        return agent_x, start_y, agent_v, y_key
+
+    def make_side(_):
         agent_x = static_x + jr.uniform(x_key, shape=(), dtype=jnp.float32, minval=-4.0, maxval=4.0)
-        agent_y = side_y
         agent_v = jr.uniform(speed_key, (num_agents,), dtype=jnp.float32, minval=0.0, maxval=40.0) / 3.6
-    elif phase == _PASSED:
+        return agent_x, side_y, agent_v, y_key
+
+    def make_passed(_):
         center_key, noise_key = jr.split(y_key)
         agent_x = static_x + jr.uniform(x_key, shape=(), dtype=jnp.float32, minval=8.0, maxval=18.0)
         agent_y = jr.uniform(
@@ -136,16 +146,23 @@ def _make_agents(
             minval=jnp.minimum(lane_centers[0], lane_centers[1]),
             maxval=jnp.maximum(lane_centers[0], lane_centers[1]),
         )
-        y_key = noise_key
         agent_v = jr.uniform(speed_key, (num_agents,), dtype=jnp.float32, minval=0.0, maxval=40.0) / 3.6
-    else:
+        return agent_x, agent_y, agent_v, noise_key
+
+    def make_done(_):
         agent_x = static_x + jr.uniform(x_key, shape=(), dtype=jnp.float32, minval=18.0, maxval=32.0)
-        agent_y = terminal_y
         agent_v = jr.uniform(speed_key, (num_agents,), dtype=jnp.float32, minval=0.0, maxval=40.0) / 3.6
+        return agent_x, terminal_y, agent_v, y_key
+
+    agent_x, agent_y, agent_v, agent_y_key = jax.lax.switch(
+        phase,
+        [make_start, make_approach, make_side, make_passed, make_done],
+        operand=None,
+    )
 
     agent_xs = jnp.full((num_agents,), agent_x, dtype=jnp.float32)
     agent_ys = jnp.full((num_agents,), agent_y, dtype=jnp.float32) + jr.uniform(
-        y_key, (num_agents,), dtype=jnp.float32, minval=-0.1, maxval=0.1
+        agent_y_key, (num_agents,), dtype=jnp.float32, minval=-0.1, maxval=0.1
     )
     return jnp.stack(
         [
@@ -170,7 +187,30 @@ def _make_dynamic_obstacle(
     xrange: Array,
     lane_centers: Array,
 ):
-    mode_key, lane_key, time_key, relevant_gap_key, weak_gap_key, side_key = jr.split(key, 6)
+    (
+        mode_key,
+        lane_key,
+        time_key,
+        relevant_gap_key,
+        weak_gap_key,
+        side_key,
+        accel_key,
+        max_speed_key,
+    ) = jr.split(key, 8)
+    dynamic_accel = jr.uniform(
+        accel_key,
+        shape=(),
+        dtype=jnp.float32,
+        minval=DYNAMIC_OBST_ACCEL_RANGE[0],
+        maxval=DYNAMIC_OBST_ACCEL_RANGE[1],
+    )
+    dynamic_max_speed = jr.uniform(
+        max_speed_key,
+        shape=(),
+        dtype=jnp.float32,
+        minval=DYNAMIC_OBST_MAX_SPEED_RANGE_KMH[0],
+        maxval=DYNAMIC_OBST_MAX_SPEED_RANGE_KMH[1],
+    ) / 3.6
     mode = jr.choice(mode_key, 3, p=jnp.array([0.7, 0.2, 0.1]))
     mean_agent_x = jnp.mean(agents[:, 0])
     mean_agent_y = jnp.mean(agents[:, 1])
@@ -191,8 +231,8 @@ def _make_dynamic_obstacle(
     )
     dynamic_distance = _accelerating_distance(
         jnp.array(0.0),
-        jnp.array(DYNAMIC_OBST_TARGET_SPEED),
-        DYNAMIC_OBST_ACCEL,
+        dynamic_max_speed,
+        dynamic_accel,
         interaction_time,
     )
     relevant_gap = jr.uniform(relevant_gap_key, shape=(), dtype=jnp.float32, minval=10.0, maxval=20.0)
@@ -230,7 +270,7 @@ def _make_dynamic_obstacle(
         jnp.array(0.0),
         jnp.array(0.0),
     )
-    return dynamic_state
+    return dynamic_state, dynamic_accel, dynamic_max_speed
 
 
 def _make_scene(
@@ -243,7 +283,7 @@ def _make_scene(
     yrange: Array,
     lane_width: float,
     lane_centers: Array,
-) -> Tuple[AgentState, ObstState, PathRefs, jnp.ndarray]:
+):
     del yrange, lane_width
     reference_key, static_key, agent_key, dynamic_key = jr.split(key, 4)
     start_x, start_y, terminal_y, terminal_v, goals, derivatives = _make_reference(
@@ -262,7 +302,7 @@ def _make_scene(
         static_x,
         static_lane,
     )
-    dynamic_state = _make_dynamic_obstacle(
+    dynamic_state, dynamic_accel, dynamic_max_speed = _make_dynamic_obstacle(
         dynamic_key,
         phase,
         agents,
@@ -273,7 +313,7 @@ def _make_scene(
         lane_centers,
     )
     obstacles = jnp.stack([static_state, dynamic_state], axis=0)
-    return agents, obstacles, goals, derivatives
+    return agents, obstacles, goals, derivatives, dynamic_accel, dynamic_max_speed
 
 
 def gen_scene_randomly_split_dynamic(
@@ -284,17 +324,23 @@ def gen_scene_randomly_split_dynamic(
     yrange: Array,
     lane_width: float,
     lane_centers: Array,
-) -> Tuple[AgentState, ObstState, PathRefs, jnp.ndarray]:
-    """Generate one of ten split scenes with one static and one moving obstacle."""
+):
+    """Generate a split scene and its moving-obstacle motion parameters."""
     choose_key, scene_key = jr.split(key)
-    scene_fns = [
-        ft.partial(_make_scene, scene_key, task, phase, num_agents, num_ref_points, xrange, yrange,
-                   lane_width, lane_centers)
-        for task in (True, False)
-        for phase in (_START, _APPROACH, _SIDE, _PASSED, _DONE)
-    ]
-    scene_id = jr.choice(choose_key, len(scene_fns), p=_SCENE_PROBS)
-    return jax.lax.switch(scene_id, scene_fns)
+    scene_id = jr.choice(choose_key, 10, p=_SCENE_PROBS)
+    lane_change = scene_id < 5
+    phase = scene_id % 5
+    return _make_scene(
+        scene_key,
+        lane_change,
+        phase,
+        num_agents,
+        num_ref_points,
+        xrange,
+        yrange,
+        lane_width,
+        lane_centers,
+    )
 
 
 def gen_scene_randomly_split(
@@ -305,7 +351,7 @@ def gen_scene_randomly_split(
     yrange: Array,
     lane_width: float,
     lane_centers: Array,
-) -> Tuple[AgentState, ObstState, PathRefs, jnp.ndarray]:
+):
     """Drop-in dynamic replacement for the original split scene generator."""
     return gen_scene_randomly_split_dynamic(
         key, num_agents, num_ref_points, xrange, yrange, lane_width, lane_centers

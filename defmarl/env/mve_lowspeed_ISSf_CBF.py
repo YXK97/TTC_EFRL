@@ -22,8 +22,8 @@ class MVELaneChangeAndOverTake_LowSpeed_ISSf_CBF(MVELaneChangeAndOverTake_LowSpe
     PARAMS.update({
         "gamma": 6.0,
         "issf_epsilon_0": 1.0,
-        "issf_epsilon_rate": 0.5,
-        "issf_epsilon_min": 1e-2,
+        "issf_epsilon_rate": 1.0,
+        "issf_epsilon_min": 1.0,
     })
 
     @override

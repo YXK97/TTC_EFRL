@@ -1,17 +1,27 @@
-from typing import Optional, Tuple
+from typing import NamedTuple, Optional, Tuple
 
 import jax.numpy as jnp
 from typing_extensions import override
 
 from .designed_scene_gen_two_lane_split_dynamic import (
-    DYNAMIC_OBST_ACCEL,
-    DYNAMIC_OBST_TARGET_SPEED,
     gen_scene_randomly_split_dynamic,
 )
 from .mve_lowspeed_CBF import MVELaneChangeAndOverTake_LowSpeed_CBF
 from defmarl.utils.graph import GraphsTuple
-from defmarl.utils.typing import Array, ObstState
+from defmarl.utils.typing import Action, Array, ObstState, State
 from defmarl.utils.utils import find_closest_goal_indices
+
+
+class MVEDynamicEnvState(NamedTuple):
+    agent: State
+    goal: State
+    obstacle: State
+    dynamic_obstacle_accel: Array
+    dynamic_obstacle_max_speed: Array
+
+    @property
+    def n_agent(self) -> int:
+        return self.agent.shape[0]
 
 
 class MVELaneChangeAndOverTake_LowSpeed_CBF_Dynamic(MVELaneChangeAndOverTake_LowSpeed_CBF):
@@ -41,14 +51,16 @@ class MVELaneChangeAndOverTake_LowSpeed_CBF_Dynamic(MVELaneChangeAndOverTake_Low
 
     @override
     def reset(self, key: Array) -> Tuple[GraphsTuple, jnp.ndarray]:
-        agents, obsts, all_goals, all_dsYddts = gen_scene_randomly_split_dynamic(
-            key,
-            self.num_agents,
-            self.num_goals,
-            self.params["default_state_range"][:2],
-            self.params["default_state_range"][2:4],
-            self.params["lane_width"],
-            self.params["lane_centers"],
+        agents, obsts, all_goals, all_dsYddts, dynamic_accel, dynamic_max_speed = (
+            gen_scene_randomly_split_dynamic(
+                key,
+                self.num_agents,
+                self.num_goals,
+                self.params["default_state_range"][:2],
+                self.params["default_state_range"][2:4],
+                self.params["lane_width"],
+                self.params["lane_centers"],
+            )
         )
         self.all_goals = all_goals
         self.all_dsYddts = all_dsYddts
@@ -59,11 +71,22 @@ class MVELaneChangeAndOverTake_LowSpeed_CBF_Dynamic(MVELaneChangeAndOverTake_Low
         goals = all_goals[agent_indices, goal_indices, :]
         dsYddts = all_dsYddts[agent_indices, goal_indices, :]
         self.num_obsts = obsts.shape[0]
-        env_state = self._create_env_state(agents, goals, obsts)
+        env_state = MVEDynamicEnvState(
+            agents,
+            goals,
+            obsts,
+            dynamic_accel,
+            dynamic_max_speed,
+        )
         return self.get_graph(env_state), dsYddts
 
     @override
-    def obst_step_euler(self, obst_states: ObstState) -> ObstState:
+    def obst_step_euler(
+        self,
+        obst_states: ObstState,
+        dynamic_accel: Array,
+        dynamic_max_speed: Array,
+    ) -> ObstState:
         assert obst_states.shape == (2, self.state_dim)
         static_obstacle = obst_states[0]
         dynamic_obstacle = obst_states[1]
@@ -73,8 +96,8 @@ class MVELaneChangeAndOverTake_LowSpeed_CBF_Dynamic(MVELaneChangeAndOverTake_Low
         )
         speed = dynamic_obstacle[4]
         speed_next = jnp.minimum(
-            speed + DYNAMIC_OBST_ACCEL * self.dt,
-            DYNAMIC_OBST_TARGET_SPEED,
+            speed + dynamic_accel * self.dt,
+            dynamic_max_speed,
         )
         speed_mid = 0.5 * (speed + speed_next)
         position_next = dynamic_obstacle[:2] + speed_mid * heading * self.dt
@@ -87,3 +110,34 @@ class MVELaneChangeAndOverTake_LowSpeed_CBF_Dynamic(MVELaneChangeAndOverTake_Low
             .set(speed_next)
         )
         return jnp.stack([static_obstacle, dynamic_obstacle_next], axis=0)
+
+    @override
+    def step(self, graph: GraphsTuple, action: Action, get_eval_info: bool = False):
+        del get_eval_info
+        env_state = graph.env_states
+        action = self.transform_action(action)
+        next_agent_states = self.agent_step_euler(env_state.agent, action)
+        next_obst_states = self.obst_step_euler(
+            env_state.obstacle,
+            env_state.dynamic_obstacle_accel,
+            env_state.dynamic_obstacle_max_speed,
+        )
+        next_goal_states, next_dsYddts = self.goal_dsYddt_step(next_agent_states)
+        next_env_state = MVEDynamicEnvState(
+            next_agent_states,
+            next_goal_states,
+            next_obst_states,
+            env_state.dynamic_obstacle_accel,
+            env_state.dynamic_obstacle_max_speed,
+        )
+        reward = self.get_reward(graph, action)
+        cost, cost_real = self.get_cost(graph, action)
+        return (
+            self.get_graph(next_env_state),
+            next_dsYddts,
+            reward,
+            cost,
+            cost_real,
+            jnp.array(False),
+            {},
+        )
