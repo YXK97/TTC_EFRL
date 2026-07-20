@@ -11,7 +11,7 @@ from defmarl.utils.typing import Action, Cost, Reward
 from defmarl.utils.utils import gen_i_j_pairs
 
 
-class MVELaneChangeAndOverTake_LowSpeed_ISSf_CBF(MVELaneChangeAndOverTake_LowSpeed_CBF):
+class MVELaneChangeAndOverTake_LowSpeed_ISSf_CBF2(MVELaneChangeAndOverTake_LowSpeed_CBF):
     """Low-speed environment with an adaptive robust ISSf-CBF cost.
 
     Longitudinal acceleration is intentionally excluded from the CBF condition.
@@ -22,7 +22,7 @@ class MVELaneChangeAndOverTake_LowSpeed_ISSf_CBF(MVELaneChangeAndOverTake_LowSpe
         "gamma": 3.0,
         "issf_epsilon_0": 1.0,
         "issf_epsilon_rate": 1.0,
-        "issf_epsilon_min": 50.0,
+        "issf_epsilon_min": 100.0,
     })
 
     @override

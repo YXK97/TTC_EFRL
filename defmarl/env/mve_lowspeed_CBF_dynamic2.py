@@ -24,7 +24,7 @@ class MVEDynamicEnvState(NamedTuple):
         return self.agent.shape[0]
 
 
-class MVELaneChangeAndOverTake_LowSpeed_CBF_Dynamic(MVELaneChangeAndOverTake_LowSpeed_CBF):
+class MVELaneChangeAndOverTake_LowSpeed_CBF_Dynamic2(MVELaneChangeAndOverTake_LowSpeed_CBF):
     """Ordinary low-speed CBF environment with one accelerating obstacle."""
 
     def __init__(
@@ -50,7 +50,7 @@ class MVELaneChangeAndOverTake_LowSpeed_CBF_Dynamic(MVELaneChangeAndOverTake_Low
         )
         PARAMS = MVELaneChangeAndOverTake_LowSpeed_CBF.PARAMS.copy()
         PARAMS.update({
-            "gamma": 10.0,
+            "gamma": 20.0,
         })
 
     @override
