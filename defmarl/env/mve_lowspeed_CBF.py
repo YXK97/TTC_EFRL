@@ -127,7 +127,7 @@ class MVELaneChangeAndOverTake_LowSpeed_CBF(LowSpeedAccelMixin):
             z_dot = jnp.array(
                 [s1[4] * hvec[0], s1[4] * hvec[1], -hvec[1] * omega, hvec[0] * omega]
             )
-            cost = -(jnp.dot(grad_z, z_dot) + gamma * (alpha - thresh)) / gamma
+            cost = -(jnp.dot(grad_z, z_dot) / gamma + alpha - thresh)
             cost = jnp.nan_to_num(cost, nan=10.0, posinf=10.0, neginf=-3.0)
             return cost, 1 - alpha
 

@@ -27,6 +27,11 @@ class MVEDynamicEnvState(NamedTuple):
 class MVELaneChangeAndOverTake_LowSpeed_CBF_Dynamic(MVELaneChangeAndOverTake_LowSpeed_CBF):
     """Ordinary low-speed CBF environment with one accelerating obstacle."""
 
+    PARAMS = MVELaneChangeAndOverTake_LowSpeed_CBF.PARAMS.copy()
+    PARAMS.update({
+        "gamma": 100.0,
+    })
+
     def __init__(
         self,
         num_agents: int,
@@ -48,10 +53,6 @@ class MVELaneChangeAndOverTake_LowSpeed_CBF_Dynamic(MVELaneChangeAndOverTake_Low
             reward_max,
             params,
         )
-        PARAMS = MVELaneChangeAndOverTake_LowSpeed_CBF.PARAMS.copy()
-        PARAMS.update({
-            "gamma": 10.0,
-        })
 
     @override
     def reset(self, key: Array) -> Tuple[GraphsTuple, jnp.ndarray]:
@@ -151,8 +152,8 @@ class MVELaneChangeAndOverTake_LowSpeed_CBF_Dynamic(MVELaneChangeAndOverTake_Low
         agent = self._observable(graph.env_states.agent)
         goal = self._observable(graph.env_states.goal)
         e = agent - goal
-        W = jnp.diag(jnp.array([2e-3, 2e-3, 0, 0, 2e-3, 0]))
-        reward = -jnp.einsum("ai,ij,ja->a", e, W, e.transpose()).mean()
-        reward -= (action[:, 0] ** 2).mean() * 0.0002
-        reward -= (action[:, 1] ** 2).mean() * 0.0002
+        W = jnp.diag(jnp.array([1e-3, 1e-3, 0, 0, 1e-3, 0]))
+        reward = -jnp.sqrt(jnp.einsum("ai,ij,ja->a", e, W, e.transpose())).mean()
+        reward -= (action[:, 0] ** 2).mean() * 0.0001
+        reward -= (action[:, 1] ** 2).mean() * 0.0001
         return reward

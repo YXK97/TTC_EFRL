@@ -19,10 +19,10 @@ class MVELaneChangeAndOverTake_LowSpeed_ISSf_CBF(MVELaneChangeAndOverTake_LowSpe
 
     PARAMS = MVELaneChangeAndOverTake_LowSpeed_CBF.PARAMS.copy()
     PARAMS.update({
-        "gamma": 3.0,
+        "gamma": 10.0,
         "issf_epsilon_0": 1.0,
         "issf_epsilon_rate": 1.0,
-        "issf_epsilon_min": 50.0,
+        "issf_epsilon_min": 100.0,
     })
 
     @override
@@ -72,8 +72,8 @@ class MVELaneChangeAndOverTake_LowSpeed_ISSf_CBF(MVELaneChangeAndOverTake_LowSpe
                 ]),
             )
             young_penalty = jnp.square(g_dot) / epsilon(h)
-            residual = h_dot + gamma * h - young_penalty
-            cost = jnp.nan_to_num(-residual / gamma, nan=10.0, posinf=10.0, neginf=-3.0)
+            residual = h_dot / gamma + h - young_penalty / gamma
+            cost = jnp.nan_to_num(-residual, nan=10.0, posinf=10.0, neginf=-3.0)
             return cost, 1 - alpha
 
         a_agent_cost = -jnp.ones((num_agents,), dtype=jnp.float32) * 3.0
@@ -120,8 +120,8 @@ class MVELaneChangeAndOverTake_LowSpeed_ISSf_CBF(MVELaneChangeAndOverTake_LowSpe
         agent = self._observable(graph.env_states.agent)
         goal = self._observable(graph.env_states.goal)
         e = agent - goal
-        W = jnp.diag(jnp.array([2e-3, 2e-3, 0, 0, 2e-3, 0]))
-        reward = -jnp.einsum("ai,ij,ja->a", e, W, e.transpose()).mean()
-        reward -= (action[:, 0] ** 2).mean() * 0.0002
-        reward -= (action[:, 1] ** 2).mean() * 0.0002
+        W = jnp.diag(jnp.array([1e-3, 1e-3, 0, 0, 1e-3, 0]))
+        reward = -jnp.sqrt(jnp.einsum("ai,ij,ja->a", e, W, e.transpose())).mean()
+        reward -= (action[:, 0] ** 2).mean() * 0.0001
+        reward -= (action[:, 1] ** 2).mean() * 0.0001
         return reward
