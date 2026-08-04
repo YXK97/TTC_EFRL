@@ -30,6 +30,7 @@ class MVELaneChangeAndOverTake_LowSpeed_CBF_Dynamic(MVELaneChangeAndOverTake_Low
     PARAMS = MVELaneChangeAndOverTake_LowSpeed_CBF.PARAMS.copy()
     PARAMS.update({
         "gamma": 100.0,
+        "v_min": 1.0 / 3.6,
     })
 
     def __init__(

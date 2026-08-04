@@ -15,9 +15,11 @@ from defmarl.utils.typing import AgentState, Array, ObstState, PathRefs, PRNGKey
 DYNAMIC_OBST_ACCEL_RANGE = (0.1, 7.0)
 DYNAMIC_OBST_MAX_SPEED_RANGE_KMH = (10.0, 60.0)
 
+EGO_MIN_INITIAL_SPEED = 1.0 / 3.6
 _EGO_NOMINAL_ACCEL = 2.0
 _INITIAL_LONGITUDINAL_GAP = 10.0
 _SCENE_PROBS = jnp.array([0.075, 0.175, 0.1, 0.1, 0.05] * 2)
+# _SCENE_PROBS = jnp.array([0.5, 0, 0, 0, 0] * 2) # debug
 
 _START = 0
 _APPROACH = 1
@@ -123,17 +125,29 @@ def _make_agents(
 
     def make_start(_):
         agent_x = jr.uniform(x_key, shape=(), dtype=jnp.float32, minval=xrange[0], maxval=start_x)
-        agent_v = jnp.zeros((num_agents,), dtype=jnp.float32)
+        agent_v = jnp.full((num_agents,), EGO_MIN_INITIAL_SPEED, dtype=jnp.float32)
         return agent_x, start_y, agent_v, y_key
 
     def make_approach(_):
         agent_x = static_x - jr.uniform(x_key, shape=(), dtype=jnp.float32, minval=18.0, maxval=32.0)
-        agent_v = jr.uniform(speed_key, (num_agents,), dtype=jnp.float32, minval=0.0, maxval=40.0) / 3.6
+        agent_v = jr.uniform(
+            speed_key,
+            (num_agents,),
+            dtype=jnp.float32,
+            minval=EGO_MIN_INITIAL_SPEED,
+            maxval=40.0 / 3.6,
+        )
         return agent_x, start_y, agent_v, y_key
 
     def make_side(_):
         agent_x = static_x + jr.uniform(x_key, shape=(), dtype=jnp.float32, minval=-4.0, maxval=4.0)
-        agent_v = jr.uniform(speed_key, (num_agents,), dtype=jnp.float32, minval=0.0, maxval=40.0) / 3.6
+        agent_v = jr.uniform(
+            speed_key,
+            (num_agents,),
+            dtype=jnp.float32,
+            minval=EGO_MIN_INITIAL_SPEED,
+            maxval=40.0 / 3.6,
+        )
         return agent_x, side_y, agent_v, y_key
 
     def make_passed(_):
@@ -146,12 +160,24 @@ def _make_agents(
             minval=jnp.minimum(lane_centers[0], lane_centers[1]),
             maxval=jnp.maximum(lane_centers[0], lane_centers[1]),
         )
-        agent_v = jr.uniform(speed_key, (num_agents,), dtype=jnp.float32, minval=0.0, maxval=40.0) / 3.6
+        agent_v = jr.uniform(
+            speed_key,
+            (num_agents,),
+            dtype=jnp.float32,
+            minval=EGO_MIN_INITIAL_SPEED,
+            maxval=40.0 / 3.6,
+        )
         return agent_x, agent_y, agent_v, noise_key
 
     def make_done(_):
         agent_x = static_x + jr.uniform(x_key, shape=(), dtype=jnp.float32, minval=18.0, maxval=32.0)
-        agent_v = jr.uniform(speed_key, (num_agents,), dtype=jnp.float32, minval=0.0, maxval=40.0) / 3.6
+        agent_v = jr.uniform(
+            speed_key,
+            (num_agents,),
+            dtype=jnp.float32,
+            minval=EGO_MIN_INITIAL_SPEED,
+            maxval=40.0 / 3.6,
+        )
         return agent_x, terminal_y, agent_v, y_key
 
     agent_x, agent_y, agent_v, agent_y_key = jax.lax.switch(
