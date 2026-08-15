@@ -16,6 +16,9 @@ from defmarl.env.mve_lowspeed_ISSf_CBF2 import MVELaneChangeAndOverTake_LowSpeed
 from defmarl.env.mve_lanechange_rsh import MVELaneChangeAndOverTake_RSH
 from defmarl.env.mve_lowspeed_bound import MVELaneChangeAndOverTake_LowSpeed_Bound
 from defmarl.env.mve_intersection import MVEIntersection
+from defmarl.env.mve_intersection_lowspeed_ISSf_CBF_dynamic import (
+    MVEIntersection_LowSpeed_ISSf_CBF_Dynamic,
+)
 
 ENV = {
     'MVELaneChange': MVELaneChangeAndOverTake,
@@ -33,6 +36,7 @@ ENV = {
     'MVELaneChangeAndOverTake_RSH': MVELaneChangeAndOverTake_RSH,
     'MVELaneChangeAndOverTake_LowSpeed_Bound': MVELaneChangeAndOverTake_LowSpeed_Bound,
     'MVEIntersection': MVEIntersection,
+    'MVEIntersection_LowSpeed_ISSf_CBF_Dynamic': MVEIntersection_LowSpeed_ISSf_CBF_Dynamic,
 }
 
 
