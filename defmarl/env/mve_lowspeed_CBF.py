@@ -32,7 +32,7 @@ class MVELaneChangeAndOverTake_LowSpeed_CBF(LowSpeedAccelMixin):
         "obst_bb_size": jnp.array([2.625, 1.647]),
         "obst_lr": 0.9025,
         "bound_bb_size": jnp.array([5.0, 1.0]),
-        "rollout_state_range": jnp.array([-5.0, 150.0, -10.0, 10.0]),
+        "rollout_state_range": jnp.array([-500.0, 1500.0, -10.0, 10.0]),
         # "agent_init_state_range": jnp.array([-100.0, -50.0, -3.7, 3.7]),
         # "terminal_state_range": jnp.array([50.0, 100.0, -3.7, 3.7]),
         "default_state_range": jnp.array([0.0, 130.0, -3.7, 3.7]),

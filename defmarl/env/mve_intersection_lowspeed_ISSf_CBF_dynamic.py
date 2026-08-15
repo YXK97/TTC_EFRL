@@ -182,7 +182,7 @@ class MVEIntersection_LowSpeed_ISSf_CBF_Dynamic(
             # A small rollout margin allows a vehicle body to reach a 75 m road
             # endpoint without position clipping at its reference endpoint.
             "rollout_state_range": jnp.array(
-                [-ROAD_HALF - 5.0, ROAD_HALF + 5.0, -ROAD_HALF - 5.0, ROAD_HALF + 5.0],
+                [-ROAD_HALF - 100.0, ROAD_HALF + 100.0, -ROAD_HALF - 100.0, ROAD_HALF + 100.0],
                 dtype=jnp.float32,
             ),
             "comm_radius": 100.0,
