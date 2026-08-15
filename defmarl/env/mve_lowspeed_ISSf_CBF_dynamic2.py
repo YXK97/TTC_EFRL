@@ -9,13 +9,13 @@ from defmarl.utils.graph import GraphsTuple
 from defmarl.utils.typing import Action, Cost, Reward
 
 
-class MVELaneChangeAndOverTake_LowSpeed_ISSf_CBF_Dynamic(MVELaneChangeAndOverTake_LowSpeed_CBF_Dynamic):
+class MVELaneChangeAndOverTake_LowSpeed_ISSf_CBF_Dynamic2(MVELaneChangeAndOverTake_LowSpeed_CBF_Dynamic):
     """Dynamic-obstacle low-speed environment with ego-only ISSf-CBF costs."""
 
     PARAMS = MVELaneChangeAndOverTake_LowSpeed_CBF_Dynamic.PARAMS.copy()
     PARAMS.update({
         "obst_bb_size": jnp.array([4, 2]),
-        "gamma": 100.0,
+        "gamma": 20.0,
         "issf_epsilon_0": 1.0,
         "issf_epsilon_rate": 1.0,
         "issf_epsilon_min": 100.0,

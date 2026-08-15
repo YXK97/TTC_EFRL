@@ -11,6 +11,7 @@ from defmarl.env.mve_lowspeed_CBF_dynamic import MVELaneChangeAndOverTake_LowSpe
 from defmarl.env.mve_lowspeed_CBF_dynamic2 import MVELaneChangeAndOverTake_LowSpeed_CBF_Dynamic2
 from defmarl.env.mve_lowspeed_ISSf_CBF import MVELaneChangeAndOverTake_LowSpeed_ISSf_CBF
 from defmarl.env.mve_lowspeed_ISSf_CBF_dynamic import MVELaneChangeAndOverTake_LowSpeed_ISSf_CBF_Dynamic
+from defmarl.env.mve_lowspeed_ISSf_CBF_dynamic2 import MVELaneChangeAndOverTake_LowSpeed_ISSf_CBF_Dynamic2
 from defmarl.env.mve_lowspeed_ISSf_CBF2 import MVELaneChangeAndOverTake_LowSpeed_ISSf_CBF2
 from defmarl.env.mve_lanechange_rsh import MVELaneChangeAndOverTake_RSH
 from defmarl.env.mve_lowspeed_bound import MVELaneChangeAndOverTake_LowSpeed_Bound
@@ -27,6 +28,7 @@ ENV = {
     'MVELaneChangeAndOverTake_LowSpeed_CBF_Dynamic2': MVELaneChangeAndOverTake_LowSpeed_CBF_Dynamic2,
     'MVELaneChangeAndOverTake_LowSpeed_ISSf_CBF': MVELaneChangeAndOverTake_LowSpeed_ISSf_CBF,
     'MVELaneChangeAndOverTake_LowSpeed_ISSf_CBF_Dynamic': MVELaneChangeAndOverTake_LowSpeed_ISSf_CBF_Dynamic,
+    'MVELaneChangeAndOverTake_LowSpeed_ISSf_CBF_Dynamic2': MVELaneChangeAndOverTake_LowSpeed_ISSf_CBF_Dynamic2,
     'MVELaneChangeAndOverTake_LowSpeed_ISSf_CBF2': MVELaneChangeAndOverTake_LowSpeed_ISSf_CBF2,
     'MVELaneChangeAndOverTake_RSH': MVELaneChangeAndOverTake_RSH,
     'MVELaneChangeAndOverTake_LowSpeed_Bound': MVELaneChangeAndOverTake_LowSpeed_Bound,
