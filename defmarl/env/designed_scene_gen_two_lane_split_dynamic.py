@@ -18,8 +18,8 @@ DYNAMIC_OBST_MAX_SPEED_RANGE_KMH = (10.0, 60.0)
 EGO_MIN_INITIAL_SPEED = 1.0 / 3.6
 _EGO_NOMINAL_ACCEL = 2.0
 _INITIAL_LONGITUDINAL_GAP = 10.0
-# _SCENE_PROBS = jnp.array([0.075, 0.175, 0.1, 0.1, 0.05] * 2)
-_SCENE_PROBS = jnp.array([0.5, 0, 0, 0, 0] * 2) # debug
+_SCENE_PROBS = jnp.array([0.075, 0.175, 0.1, 0.1, 0.05] * 2)
+# _SCENE_PROBS = jnp.array([0.5, 0, 0, 0, 0] * 2) # debug
 
 _START = 0
 _APPROACH = 1

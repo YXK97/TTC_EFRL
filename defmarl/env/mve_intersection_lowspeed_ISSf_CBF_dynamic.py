@@ -541,7 +541,7 @@ class MVEIntersection_LowSpeed_ISSf_CBF_Dynamic(
             axis=0,
         )
         max_visible_coordinate = float(np.max(np.abs(visible_positions)))
-        view_half = max(road_half + 5.0, max_visible_coordinate + 10.0)
+        view_half = road_half + 5.0
 
         fig, ax = plt.subplots(1, 1, figsize=(10, 10), dpi=120)
         ax.set_xlim(-view_half, view_half)
