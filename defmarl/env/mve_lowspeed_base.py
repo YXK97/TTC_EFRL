@@ -362,7 +362,7 @@ class LowSpeedAccelMixin(MVE):
     def render_video(self, rollout: Rollout, video_path: pathlib.Path, Ta_is_unsafe=None,
                      n_goals: Optional[int] = None, **kwargs) -> None:
         n_goals = self.num_agents if n_goals is None else n_goals
-        xlim = self.params["rollout_state_range"][:2]
+        xlim = self.params["default_state_range"][:2]
         ylim = self.params["default_state_range"][2:4]
         fig, ax = plt.subplots(1, 1, figsize=(30, (ylim[1] + 3 - (ylim[0] - 3)) * 20 / (xlim[1] + 3 - (xlim[0] - 3)) + 4), dpi=100)
         ax.set_xlim(xlim[0], xlim[1])

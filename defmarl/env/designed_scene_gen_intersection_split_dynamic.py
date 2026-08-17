@@ -20,8 +20,10 @@ import jax.random as jr
 from defmarl.utils.typing import AgentState, Array, ObstState, PathRefs, PRNGKey
 
 
-ROAD_HALF = 75.0
-TURN_HALF = 15.0
+# +/-50 m is the nominal scene-generation window.  Roads and references do not
+# terminate there; both continue beyond this window during rollout.
+ROAD_HALF = 50.0
+TURN_HALF = 12.5
 POINT_INTERVAL = 0.1
 
 MAIN_LANE_WIDTH = 3.7
@@ -56,11 +58,12 @@ PHASE_SIDE = 2
 PHASE_PASSED = 3
 PHASE_DONE = 4
 
-# These are production probabilities, not the START-only debug distribution
-# found in an earlier straight-road generator.
-MANEUVER_PROBS = jnp.array([1.0 / 3.0] * 3, dtype=jnp.float32)
+# The first five IDs are turning scenes and the second five are straight scenes;
+# ID % 5 is the
+# split phase.  A turning scene samples left/right with equal probability.
+SCENE_PROBS = jnp.array([0.075, 0.175, 0.1, 0.1, 0.05] * 2, dtype=jnp.float32)
+TURN_DIRECTION_PROBS = jnp.array([0.5, 0.5], dtype=jnp.float32)
 DYNAMIC_RELATION_PROBS = jnp.array([1.0 / 3.0] * 3, dtype=jnp.float32)
-PHASE_PROBS = jnp.array([0.2] * 5, dtype=jnp.float32)
 
 
 def _right_normal(direction: Array) -> Array:
@@ -130,9 +133,11 @@ def _path_geometry(
     )
     terminal_dir = jnp.where(is_straight, start_dir, terminal_dir_turn)
 
-    # Straight paths are parameterized exactly by travelled distance.
+    # Straight paths are parameterized exactly by travelled distance.  Do not
+    # clamp path_s at straight_total: +/-50 m only marks the nominal generation
+    # window, while the road itself is unbounded in its travel direction.
     straight_total = 2.0 * ROAD_HALF
-    straight_s = jnp.clip(path_s, 0.0, straight_total)
+    straight_s = path_s
     straight_xy = _road_point(start_road_idx, -ROAD_HALF + straight_s, start_offset)
 
     approach_len = ROAD_HALF - TURN_HALF
@@ -148,11 +153,13 @@ def _path_geometry(
     curve_len = jnp.pi * radius_estimate / 2.0
     turn_total = approach_len + curve_len + (ROAD_HALF - TURN_HALF)
 
-    turn_s = jnp.clip(path_s, 0.0, turn_total)
+    # The same rule applies to turns.  Before the Bezier interval the approach
+    # continues backwards; after it the exit ray continues forwards forever.
+    turn_s = path_s
     curve_t = jnp.clip((turn_s - approach_len) / jnp.maximum(curve_len, 1e-6), 0.0, 1.0)
     curve_xy, curve_heading, curve_curvature = _bezier_geometry(curve_t, p0, p1, p2, p3)
     approach_xy = _road_point(start_road_idx, -ROAD_HALF + turn_s, start_offset)
-    exit_distance = jnp.clip(turn_s - approach_len - curve_len, 0.0, ROAD_HALF - TURN_HALF)
+    exit_distance = turn_s - approach_len - curve_len
     exit_xy = p3 + terminal_dir * exit_distance
 
     in_approach = turn_s < approach_len
@@ -175,10 +182,15 @@ def _generate_reference(
     maneuver: Array,
     lane_idx: Array,
     reference_speed: Array,
+    reference_start_s: Array,
     ego_wheelbase: float = 1.75,
 ) -> Tuple[PathRefs, Array, Array]:
-    """Generate fixed-speed reference states and the legacy derivative tensor."""
-    path_s = jnp.arange(num_points, dtype=jnp.float32) * POINT_INTERVAL
+    """Generate a forward reference beginning at ego's initial path progress.
+
+    A fixed 0.1 m interval and ``num_points`` determine the horizon.  The
+    nominal +/-50 m scene window never truncates or repeats the final point.
+    """
+    path_s = reference_start_s + jnp.arange(num_points, dtype=jnp.float32) * POINT_INTERVAL
     xy, heading, curvature, total = jax.vmap(
         _path_geometry, in_axes=(0, None, None, None)
     )(path_s, start_road_idx, maneuver, lane_idx)
@@ -364,8 +376,8 @@ def _make_dynamic_obstacle(
     xy = _road_point(obstacle_road, obstacle_longitudinal, obstacle_lane_offset)
 
     # Compare the original, forward-shifted, and backward-shifted candidates.
-    # This also works at a +/-75 m endpoint, where shifting in only one direction
-    # could be clipped back to the original unsafe position.
+    # This also works at a nominal road-window endpoint, where shifting in only
+    # one direction could be clipped back to the original unsafe position.
     candidate_longitudinals = jnp.array(
         [
             obstacle_longitudinal,
@@ -409,11 +421,23 @@ def _make_scene(
         minval=REFERENCE_SPEED_RANGE_KMH[0] / 3.6,
         maxval=REFERENCE_SPEED_RANGE_KMH[1] / 3.6,
     )
-    goals, derivatives, path_total = _generate_reference(
-        num_agents, num_ref_points, start_road_idx, maneuver, lane_idx, reference_speed
+    # path_total describes only the nominal entrance-to-exit window and is used
+    # to place the static obstacle.  Reference generation itself starts later,
+    # after ego_s is known, and continues beyond this total without clamping.
+    _, _, _, path_total = _path_geometry(
+        jnp.array(0.0, dtype=jnp.float32), start_road_idx, maneuver, lane_idx
     )
     static_s, ego_s = _sample_path_positions(progress_key, phase, path_total)
     agents = _make_agents(agent_key, phase, num_agents, ego_s, start_road_idx, maneuver, lane_idx)
+    goals, derivatives, _ = _generate_reference(
+        num_agents,
+        num_ref_points,
+        start_road_idx,
+        maneuver,
+        lane_idx,
+        reference_speed,
+        ego_s,
+    )
     static_obstacle = _make_static_obstacle(static_s, start_road_idx, maneuver, lane_idx)
     dynamic_obstacle, dynamic_accel, dynamic_target_speed = _make_dynamic_obstacle(
         dynamic_key,
@@ -456,9 +480,18 @@ class IntersectionSplitDynamicScene:
 
     def make(self) -> Tuple[AgentState, ObstState, PathRefs, Array, Array, Array]:
         choose_key, scene_key = jr.split(self.key)
-        maneuver_key, relation_key, phase_key = jr.split(choose_key, 3)
+        scene_id_key, turn_key, relation_key = jr.split(choose_key, 3)
+        scene_id = jr.choice(scene_id_key, 10, p=SCENE_PROBS)
+        sampled_turn = jr.choice(
+            turn_key,
+            jnp.array([MANEUVER_LEFT, MANEUVER_RIGHT], dtype=jnp.int32),
+            p=TURN_DIRECTION_PROBS,
+        )
+        sampled_maneuver = jnp.where(
+            scene_id < 5, sampled_turn, MANEUVER_STRAIGHT
+        )
         maneuver = (
-            jr.choice(maneuver_key, 3, p=MANEUVER_PROBS)
+            sampled_maneuver
             if self.maneuver is None
             else jnp.asarray(self.maneuver, dtype=jnp.int32)
         )
@@ -468,7 +501,7 @@ class IntersectionSplitDynamicScene:
             else jnp.asarray(self.dynamic_relation, dtype=jnp.int32)
         )
         phase = (
-            jr.choice(phase_key, 5, p=PHASE_PROBS)
+            scene_id % 5
             if self.phase is None
             else jnp.asarray(self.phase, dtype=jnp.int32)
         )

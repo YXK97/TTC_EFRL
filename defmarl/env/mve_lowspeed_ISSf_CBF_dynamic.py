@@ -14,6 +14,7 @@ class MVELaneChangeAndOverTake_LowSpeed_ISSf_CBF_Dynamic(MVELaneChangeAndOverTak
 
     PARAMS = MVELaneChangeAndOverTake_LowSpeed_CBF_Dynamic.PARAMS.copy()
     PARAMS.update({
+        "delta_abs_max": 20.0 * jnp.pi / 180.0,
         "obst_bb_size": jnp.array([4, 2]),
         "gamma": 100.0,
         "issf_epsilon_0": 1.0,

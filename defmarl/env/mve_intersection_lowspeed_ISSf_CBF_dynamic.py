@@ -177,12 +177,13 @@ class MVEIntersection_LowSpeed_ISSf_CBF_Dynamic(
     PARAMS.update(
         {
             "default_state_range": jnp.array(
-                [-ROAD_HALF, ROAD_HALF, -ROAD_HALF, ROAD_HALF], dtype=jnp.float32
+                [-ROAD_HALF-5, ROAD_HALF+5, -ROAD_HALF-5, ROAD_HALF+5], dtype=jnp.float32
             ),
-            # A small rollout margin allows a vehicle body to reach a 75 m road
-            # endpoint without position clipping at its reference endpoint.
+            # +/-50 m is only the initialization window.  The road and reference
+            # continue beyond it, so retain enough rollout room for 256 low-speed
+            # steps without clipping ego at the nominal scene boundary.
             "rollout_state_range": jnp.array(
-                [-ROAD_HALF - 100.0, ROAD_HALF + 100.0, -ROAD_HALF - 100.0, ROAD_HALF + 100.0],
+                [-ROAD_HALF - 200.0, ROAD_HALF + 200.0, -ROAD_HALF - 200.0, ROAD_HALF + 200.0],
                 dtype=jnp.float32,
             ),
             "comm_radius": 100.0,
@@ -525,25 +526,41 @@ class MVEIntersection_LowSpeed_ISSf_CBF_Dynamic(
         turn_half = float(self.params["intersection_radius"])
         main_half = float(self.params["main_road_half_width"])
         auxiliary_half = float(self.params["auxiliary_road_half_width"])
+        trajectory = rollout.graph
+
+        # Expand the viewport when rollout entities have travelled beyond the
+        # nominal 100 x 100 m initialization window.  Forbidden regions and road
+        # markings are then drawn to the new viewport edge, visually expressing
+        # the same unbounded half-spaces used by the CBF.
+        visible_positions = np.concatenate(
+            [
+                np.asarray(trajectory.env_states.agent[..., :2]).reshape(-1, 2),
+                np.asarray(trajectory.env_states.obstacle[..., :2]).reshape(-1, 2),
+                np.asarray(trajectory.env_states.goal[..., :2]).reshape(-1, 2),
+            ],
+            axis=0,
+        )
+        max_visible_coordinate = float(np.max(np.abs(visible_positions)))
+        view_half = max(road_half + 5.0, max_visible_coordinate + 10.0)
 
         fig, ax = plt.subplots(1, 1, figsize=(10, 10), dpi=120)
-        ax.set_xlim(-road_half - 5.0, road_half + 5.0)
-        ax.set_ylim(-road_half - 5.0, road_half + 5.0)
+        ax.set_xlim(-view_half, view_half)
+        ax.set_ylim(-view_half, view_half)
         ax.set_aspect("equal")
         ax.set_xlabel("x / m")
         ax.set_ylabel("y / m")
 
-        # Finite rendering polygons are the visible portions of the four
-        # unbounded convex regions used by intersection_corner_halfspaces().
+        # These vertices close only at the current viewport edge.  The actual
+        # CBF polygons are unbounded and are never clipped at ROAD_HALF.
         corner_polygons = [
-            [(-road_half, -road_half), (-road_half, -main_half), (-turn_half, -main_half),
-             (-auxiliary_half, -turn_half), (-auxiliary_half, -road_half)],
-            [(auxiliary_half, -road_half), (auxiliary_half, -turn_half), (turn_half, -main_half),
-             (road_half, -main_half), (road_half, -road_half)],
-            [(auxiliary_half, turn_half), (turn_half, main_half), (road_half, main_half),
-             (road_half, road_half), (auxiliary_half, road_half)],
-            [(-road_half, main_half), (-turn_half, main_half), (-auxiliary_half, turn_half),
-             (-auxiliary_half, road_half), (-road_half, road_half)],
+            [(-view_half, -view_half), (-view_half, -main_half), (-turn_half, -main_half),
+             (-auxiliary_half, -turn_half), (-auxiliary_half, -view_half)],
+            [(auxiliary_half, -view_half), (auxiliary_half, -turn_half), (turn_half, -main_half),
+             (view_half, -main_half), (view_half, -view_half)],
+            [(auxiliary_half, turn_half), (turn_half, main_half), (view_half, main_half),
+             (view_half, view_half), (auxiliary_half, view_half)],
+            [(-view_half, main_half), (-turn_half, main_half), (-auxiliary_half, turn_half),
+             (-auxiliary_half, view_half), (-view_half, view_half)],
         ]
         for polygon in corner_polygons:
             ax.fill(
@@ -558,24 +575,32 @@ class MVEIntersection_LowSpeed_ISSf_CBF_Dynamic(
         dash_style = (0, (7, 7))
         # Main-road curbs and its two-lane center separator.
         for y in (-main_half, main_half):
-            ax.plot([-road_half, -turn_half], [y, y], color=road_color, linewidth=1.4)
-            ax.plot([turn_half, road_half], [y, y], color=road_color, linewidth=1.4)
-        ax.plot([-road_half, -turn_half], [0.0, 0.0], color=road_color, linestyle=dash_style)
-        ax.plot([turn_half, road_half], [0.0, 0.0], color=road_color, linestyle=dash_style)
+            ax.plot([-view_half, -turn_half], [y, y], color=road_color, linewidth=1.4)
+            ax.plot([turn_half, view_half], [y, y], color=road_color, linewidth=1.4)
+        ax.plot([-view_half, -turn_half], [0.0, 0.0], color=road_color, linestyle=dash_style)
+        ax.plot([turn_half, view_half], [0.0, 0.0], color=road_color, linestyle=dash_style)
 
         # Auxiliary-road curbs and its two-lane center separator.
         for x in (-auxiliary_half, auxiliary_half):
-            ax.plot([x, x], [-road_half, -turn_half], color=road_color, linewidth=1.4)
-            ax.plot([x, x], [turn_half, road_half], color=road_color, linewidth=1.4)
-        ax.plot([0.0, 0.0], [-road_half, -turn_half], color=road_color, linestyle=dash_style)
-        ax.plot([0.0, 0.0], [turn_half, road_half], color=road_color, linestyle=dash_style)
+            ax.plot([x, x], [-view_half, -turn_half], color=road_color, linewidth=1.4)
+            ax.plot([x, x], [turn_half, view_half], color=road_color, linewidth=1.4)
+        ax.plot([0.0, 0.0], [-view_half, -turn_half], color=road_color, linestyle=dash_style)
+        ax.plot([0.0, 0.0], [turn_half, view_half], color=road_color, linestyle=dash_style)
 
-        # Plot the full fixed reference rather than only the current goal node.
-        if hasattr(self, "all_goals"):
-            reference = np.asarray(self.all_goals[0, :, :2])
-            ax.plot(reference[:, 0], reference[:, 1], color="#2f9e44", linewidth=1.2, zorder=2)
+        # Match mve_lowspeed_base.py: render exactly the reference points that
+        # ego recorded during rollout.  No trajectory regeneration, interpolation,
+        # or tangent extension is performed here.
+        recorded_goals = np.asarray(trajectory.env_states.goal[:, :, :2])
+        ax.scatter(
+            recorded_goals[:, :, 0].reshape(-1),
+            recorded_goals[:, :, 1].reshape(-1),
+            color="#2fdd00",
+            zorder=7,
+            s=5,
+            alpha=1.0,
+            marker=".",
+        )
 
-        trajectory = rollout.graph
         graph0 = tree_index(trajectory, 0)
         agent_arrows, agent_rects = self._plot_pose(
             ax,
