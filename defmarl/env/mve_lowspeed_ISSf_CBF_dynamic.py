@@ -14,7 +14,6 @@ class MVELaneChangeAndOverTake_LowSpeed_ISSf_CBF_Dynamic(MVELaneChangeAndOverTak
 
     PARAMS = MVELaneChangeAndOverTake_LowSpeed_CBF_Dynamic.PARAMS.copy()
     PARAMS.update({
-        "delta_abs_max": 20.0 * jnp.pi / 180.0,
         "obst_bb_size": jnp.array([4, 2]),
         "gamma": 100.0,
         "issf_epsilon_0": 1.0,
@@ -22,7 +21,7 @@ class MVELaneChangeAndOverTake_LowSpeed_ISSf_CBF_Dynamic(MVELaneChangeAndOverTak
         "issf_epsilon_min": 100.0,
         # Applied until ego's center passes the static obstacle. Keep this
         # ISSf-specific so the ordinary dynamic CBF environment is unchanged.
-        "pre_static_penalty": 0.05,
+        "pre_static_penalty": 0.5,
     })
 
     @override

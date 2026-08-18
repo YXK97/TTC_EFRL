@@ -17,7 +17,6 @@ class MVELaneChangeAndOverTake_LowSpeed_ISSf_CBF_Dynamic2(MVELaneChangeAndOverTa
 
     PARAMS = MVELaneChangeAndOverTake_LowSpeed_CBF_Dynamic.PARAMS.copy()
     PARAMS.update({
-        "delta_abs_max": 20.0 * jnp.pi / 180.0,
         "obst_bb_size": jnp.array([4, 2]),
         "gamma": 20.0,
         "issf_epsilon_0": 1.0,
@@ -32,6 +31,14 @@ class MVELaneChangeAndOverTake_LowSpeed_ISSf_CBF_Dynamic2(MVELaneChangeAndOverTa
 
     @override
     def get_reward(self, graph: GraphsTuple, action: Action) -> Reward:
-        return MVELaneChangeAndOverTake_LowSpeed_ISSf_CBF_Dynamic.get_reward(
-            self, graph, action
-        )
+        agent = self._observable(graph.env_states.agent)
+        goal = self._observable(graph.env_states.goal)
+        e = agent - goal
+        W = jnp.diag(jnp.array([1e-3, 1e-3, 0, 0, 1e-3, 0]))
+        reward = -jnp.sqrt(jnp.einsum("ai,ij,ja->a", e, W, e.transpose())).mean()
+        reward -= (action[:, 0] ** 2).mean() * 0.0001
+        reward -= (action[:, 1] ** 2).mean() * 0.0001
+        static_x = graph.env_states.obstacle[0, 0]
+        ego_not_past_static = (agent[:, 0] <= static_x).astype(jnp.float32)
+        reward -= self.params["pre_static_penalty"] * ego_not_past_static.mean()
+        return reward
