@@ -18,14 +18,18 @@ DYNAMIC_OBST_MAX_SPEED_RANGE_KMH = (10.0, 60.0)
 EGO_MIN_INITIAL_SPEED = 1.0 / 3.6
 _EGO_NOMINAL_ACCEL = 2.0
 _INITIAL_LONGITUDINAL_GAP = 10.0
-_SCENE_PROBS = jnp.array([0.075, 0.175, 0.1, 0.1, 0.05] * 2)
-# _SCENE_PROBS = jnp.array([0.5, 0, 0, 0, 0] * 2) # debug
+# Phase probabilities, summing over the two reference types:
+# START=5%, APPROACH=30%, SIDE=15%, PASSED=15%, DONE=10%,
+# YIELD_RESUME=25%.
+_SCENE_PROBS = jnp.array([0.025, 0.15, 0.075, 0.075, 0.05, 0.125] * 2)
 
 _START = 0
 _APPROACH = 1
 _SIDE = 2
 _PASSED = 3
 _DONE = 4
+_YIELD_RESUME = 5
+_NUM_PHASES = 6
 
 
 def _accelerating_distance(v0: Array, target_v: Array, accel: float, t: Array) -> Array:
@@ -129,7 +133,13 @@ def _make_agents(
         return agent_x, start_y, agent_v, y_key
 
     def make_approach(_):
-        agent_x = static_x - jr.uniform(x_key, shape=(), dtype=jnp.float32, minval=18.0, maxval=32.0)
+        agent_x = static_x - jr.uniform(
+            x_key,
+            shape=(),
+            dtype=jnp.float32,
+            minval=15.0,
+            maxval=25.0,
+        )
         agent_v = jr.uniform(
             speed_key,
             (num_agents,),
@@ -180,9 +190,24 @@ def _make_agents(
         )
         return agent_x, terminal_y, agent_v, y_key
 
+    def make_yield_resume(_):
+        # Put ego behind a static obstacle in its own lane. A low but nonzero
+        # initial speed covers both the final yielding step and restarting.
+        agent_x = static_x - jr.uniform(
+            x_key, shape=(), dtype=jnp.float32, minval=15.0, maxval=25.0
+        )
+        agent_v = jr.uniform(
+            speed_key,
+            (num_agents,),
+            dtype=jnp.float32,
+            minval=EGO_MIN_INITIAL_SPEED,
+            maxval=15.0 / 3.6,
+        )
+        return agent_x, lane_centers[static_lane], agent_v, y_key
+
     agent_x, agent_y, agent_v, agent_y_key = jax.lax.switch(
         phase,
-        [make_start, make_approach, make_side, make_passed, make_done],
+        [make_start, make_approach, make_side, make_passed, make_done, make_yield_resume],
         operand=None,
     )
 
@@ -237,6 +262,16 @@ def _make_dynamic_obstacle(
         minval=DYNAMIC_OBST_MAX_SPEED_RANGE_KMH[0],
         maxval=DYNAMIC_OBST_MAX_SPEED_RANGE_KMH[1],
     ) / 3.6
+    yield_max_speed = jr.uniform(
+        max_speed_key,
+        shape=(),
+        dtype=jnp.float32,
+        minval=25.0,
+        maxval=45.0,
+    ) / 3.6
+    dynamic_max_speed = jnp.where(
+        phase == _YIELD_RESUME, yield_max_speed, dynamic_max_speed
+    )
     mode = jr.choice(mode_key, 3, p=jnp.array([0.7, 0.2, 0.1]))
     mean_agent_x = jnp.mean(agents[:, 0])
     mean_agent_y = jnp.mean(agents[:, 1])
@@ -290,11 +325,33 @@ def _make_dynamic_obstacle(
     fallback_x = mean_agent_x + 15.0
     dynamic_lane = jnp.where(valid, dynamic_lane, fallback_lane)
     dynamic_x = jnp.where(valid, dynamic_x, fallback_x)
+    # Targeted yield-and-resume samples: the moving vehicle occupies the lane
+    # available around the static obstacle and is either about to pass it or
+    # has just cleared it. Starting it in motion makes the clearing cue visible
+    # within a short rollout horizon.
+    yield_dynamic_x = static_x + jr.uniform(
+        relevant_gap_key,
+        shape=(),
+        dtype=jnp.float32,
+        minval=-12.0,
+        maxval=12.0,
+    )
+    yield_dynamic_speed = jr.uniform(
+        weak_gap_key,
+        shape=(),
+        dtype=jnp.float32,
+        minval=0.5,
+        maxval=0.9,
+    ) * dynamic_max_speed
+    is_yield_resume = phase == _YIELD_RESUME
+    dynamic_lane = jnp.where(is_yield_resume, 1 - static_lane, dynamic_lane)
+    dynamic_x = jnp.where(is_yield_resume, yield_dynamic_x, dynamic_x)
+    dynamic_speed = jnp.where(is_yield_resume, yield_dynamic_speed, 0.0)
     dynamic_state = make_state(
         dynamic_x,
         lane_centers[dynamic_lane],
         jnp.array(0.0),
-        jnp.array(0.0),
+        dynamic_speed,
     )
     return dynamic_state, dynamic_accel, dynamic_max_speed
 
@@ -316,6 +373,18 @@ def _make_scene(
         reference_key, lane_change, num_agents, num_ref_points, xrange, lane_centers
     )
     static_x, static_lane, static_state = _make_static_obstacle(static_key, xrange, lane_centers)
+    # The targeted scenario must actually block ego's reference-start lane.
+    # Other phases retain the independently sampled obstacle lane.
+    reference_start_lane = jnp.argmin(jnp.abs(lane_centers - start_y))
+    static_lane = jnp.where(
+        phase == _YIELD_RESUME, reference_start_lane, static_lane
+    )
+    static_state = make_state(
+        static_x,
+        lane_centers[static_lane],
+        jnp.array(0.0),
+        jnp.array(0.0),
+    )
     agents = _make_agents(
         agent_key,
         phase,
@@ -351,11 +420,11 @@ def gen_scene_randomly_split_dynamic(
     lane_width: float,
     lane_centers: Array,
 ):
-    """Generate a split scene and its moving-obstacle motion parameters."""
+    """Generate the six-phase dynamic split scene."""
     choose_key, scene_key = jr.split(key)
-    scene_id = jr.choice(choose_key, 10, p=_SCENE_PROBS)
-    lane_change = scene_id < 5
-    phase = scene_id % 5
+    scene_id = jr.choice(choose_key, 2 * _NUM_PHASES, p=_SCENE_PROBS)
+    lane_change = scene_id < _NUM_PHASES
+    phase = scene_id % _NUM_PHASES
     return _make_scene(
         scene_key,
         lane_change,

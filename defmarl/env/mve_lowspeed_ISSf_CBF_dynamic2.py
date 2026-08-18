@@ -5,6 +5,9 @@ from typing_extensions import override
 
 from .mve_lowspeed_CBF_dynamic import MVELaneChangeAndOverTake_LowSpeed_CBF_Dynamic
 from .mve_lowspeed_ISSf_CBF import MVELaneChangeAndOverTake_LowSpeed_ISSf_CBF
+from .mve_lowspeed_ISSf_CBF_dynamic import (
+    MVELaneChangeAndOverTake_LowSpeed_ISSf_CBF_Dynamic,
+)
 from defmarl.utils.graph import GraphsTuple
 from defmarl.utils.typing import Action, Cost, Reward
 
@@ -20,6 +23,7 @@ class MVELaneChangeAndOverTake_LowSpeed_ISSf_CBF_Dynamic2(MVELaneChangeAndOverTa
         "issf_epsilon_0": 1.0,
         "issf_epsilon_rate": 1.0,
         "issf_epsilon_min": 100.0,
+        "pre_static_penalty": 0.05,
     })
 
     @override
@@ -28,11 +32,6 @@ class MVELaneChangeAndOverTake_LowSpeed_ISSf_CBF_Dynamic2(MVELaneChangeAndOverTa
 
     @override
     def get_reward(self, graph: GraphsTuple, action: Action) -> Reward:
-        agent = self._observable(graph.env_states.agent)
-        goal = self._observable(graph.env_states.goal)
-        e = agent - goal
-        W = jnp.diag(jnp.array([1e-3, 1e-3, 0, 0, 1e-3, 0]))
-        reward = -jnp.sqrt(jnp.einsum("ai,ij,ja->a", e, W, e.transpose())).mean()
-        reward -= (action[:, 0] ** 2).mean() * 0.0001
-        reward -= (action[:, 1] ** 2).mean() * 0.0001
-        return reward
+        return MVELaneChangeAndOverTake_LowSpeed_ISSf_CBF_Dynamic.get_reward(
+            self, graph, action
+        )

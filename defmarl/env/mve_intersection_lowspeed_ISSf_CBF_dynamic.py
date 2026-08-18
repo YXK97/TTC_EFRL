@@ -636,7 +636,41 @@ class MVEIntersection_LowSpeed_ISSf_CBF_Dynamic(
             edge_segments(graph0), colors="0.2", linewidths=1.0, alpha=0.35, zorder=3
         )
         ax.add_collection(edge_collection)
-        status_text = ax.text(0.01, 1.01, "", transform=ax.transAxes, va="bottom")
+
+        # Keep the per-step training signals on the left, matching the other
+        # low-speed environments.  Agent-agent cost is intentionally omitted:
+        # this intersection task asks to inspect obstacle and boundary costs.
+        cost_text = ax.text(
+            0.02,
+            1.00,
+            "",
+            transform=ax.transAxes,
+            va="bottom",
+            size=14,
+            color="k",
+        )
+        # Runtime status belongs on the opposite side so it cannot overlap the
+        # multi-line cost/reward block.
+        step_text = ax.text(
+            0.99,
+            1.10,
+            "step=0",
+            transform=ax.transAxes,
+            va="bottom",
+            ha="right",
+            size=14,
+            color="k",
+        )
+        unsafe_text = ax.text(
+            0.99,
+            1.03,
+            "unsafe=[]",
+            transform=ax.transAxes,
+            va="bottom",
+            ha="right",
+            size=14,
+            color="k",
+        )
 
         def update_pose(arrows, rectangles, states, bb_size, rear_offset):
             headings = np.asarray(self._normalize_heading(states[:, 2:4]))
@@ -667,17 +701,37 @@ class MVEIntersection_LowSpeed_ISSf_CBF_Dynamic(
                 self.params["obst_bb_size"], self.params["obst_lr"]
             )
             edge_collection.set_segments(edge_segments(graph))
-            unsafe = ""
+
+            # rollout.costs has shape [step, agent, cost_component].  Display
+            # the worst agent value for each requested component, as in
+            # mve_lowspeed_base.py.
+            if frame < len(rollout.costs):
+                frame_costs = np.asarray(rollout.costs[frame])
+                obstacle_cost = float(np.max(frame_costs[:, 1]))
+                boundary_cost = float(np.max(frame_costs[:, 2]))
+                reward = float(np.asarray(rollout.rewards[frame]))
+                cost_text.set_text(
+                    "Cost:\n"
+                    f"    {self.cost_components[1]}: {obstacle_cost:5.4f}\n"
+                    f"    {self.cost_components[2]}: {boundary_cost:5.4f}\n"
+                    f"Reward: {reward:5.4f}"
+                )
+
+            unsafe_text.set_text("unsafe=[]")
             if Ta_is_unsafe is not None and frame < len(Ta_is_unsafe):
-                unsafe = f"  unsafe={np.where(Ta_is_unsafe[frame])[0]}"
-            status_text.set_text(f"step={frame}{unsafe}")
+                unsafe_text.set_text(
+                    f"unsafe={np.where(Ta_is_unsafe[frame])[0]}"
+                )
+            step_text.set_text(f"step={frame}")
             return [
                 edge_collection,
                 *agent_arrows,
                 *agent_rects,
                 *obstacle_arrows,
                 *obstacle_rects,
-                status_text,
+                cost_text,
+                step_text,
+                unsafe_text,
             ]
 
         animation = FuncAnimation(

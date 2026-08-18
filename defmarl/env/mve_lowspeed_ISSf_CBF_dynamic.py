@@ -20,6 +20,9 @@ class MVELaneChangeAndOverTake_LowSpeed_ISSf_CBF_Dynamic(MVELaneChangeAndOverTak
         "issf_epsilon_0": 1.0,
         "issf_epsilon_rate": 1.0,
         "issf_epsilon_min": 100.0,
+        # Applied until ego's center passes the static obstacle. Keep this
+        # ISSf-specific so the ordinary dynamic CBF environment is unchanged.
+        "pre_static_penalty": 0.05,
     })
 
     @override
@@ -35,4 +38,7 @@ class MVELaneChangeAndOverTake_LowSpeed_ISSf_CBF_Dynamic(MVELaneChangeAndOverTak
         reward = -jnp.sqrt(jnp.einsum("ai,ij,ja->a", e, W, e.transpose())).mean()
         reward -= (action[:, 0] ** 2).mean() * 0.0001
         reward -= (action[:, 1] ** 2).mean() * 0.0001
+        static_x = graph.env_states.obstacle[0, 0]
+        ego_not_past_static = (agent[:, 0] <= static_x).astype(jnp.float32)
+        reward -= self.params["pre_static_penalty"] * ego_not_past_static.mean()
         return reward
