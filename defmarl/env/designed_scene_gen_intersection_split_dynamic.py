@@ -33,6 +33,7 @@ AUX_LANE_CENTERS = jnp.array([-AUX_LANE_WIDTH / 2.0, AUX_LANE_WIDTH / 2.0], dtyp
 
 REFERENCE_SPEED_RANGE_KMH = (10.0, 40.0)
 EGO_MIN_INITIAL_SPEED = 1.0 / 3.6
+EGO_WHEELBASE = 1.75
 DYNAMIC_INITIAL_SPEED_RANGE_KMH = (10.0, 40.0)
 DYNAMIC_TARGET_SPEED_RANGE_KMH = (0.0, 40.0)
 DYNAMIC_ACCEL_MAGNITUDE_RANGE = (0.1, 3.0)
@@ -175,6 +176,65 @@ def _path_geometry(
     return xy, heading, curvature, total
 
 
+def _map_progress_to_adjacent_lane(
+    path_s: Array,
+    start_road_idx: Array,
+    maneuver: Array,
+    lane_idx: Array,
+) -> Array:
+    """Map canonical path progress to the same cross-section of the other lane.
+
+    ``path_s`` remains the logical progress on the original reference path.  On
+    straight entrance and exit rays, both lane paths use the same longitudinal
+    distance.  Their Bezier portions have different lengths, however, because
+    the two lane offsets produce different turning radii.  Inside the turn we
+    therefore preserve normalized Bezier progress; after the turn we preserve
+    distance travelled beyond the original curve endpoint.
+
+    Keeping this conversion separate is important for SIDE scenes: ego is
+    physically initialized on the adjacent path, while its goals must stay on
+    the original path so that it learns to merge back after passing the static
+    obstacle.
+    """
+    adjacent_lane_idx = 1 - lane_idx
+    zero_s = jnp.array(0.0, dtype=jnp.float32)
+    _, _, _, original_total = _path_geometry(
+        zero_s, start_road_idx, maneuver, lane_idx
+    )
+    _, _, _, adjacent_total = _path_geometry(
+        zero_s, start_road_idx, maneuver, adjacent_lane_idx
+    )
+
+    approach_len = ROAD_HALF - TURN_HALF
+    original_curve_len = original_total - 2.0 * approach_len
+    adjacent_curve_len = adjacent_total - 2.0 * approach_len
+
+    # Use original-path progress to decide which geometric section contains the
+    # requested cross-section.  This also keeps the mapping continuous at both
+    # Bezier endpoints.
+    normalized_turn_progress = (
+        (path_s - approach_len) / jnp.maximum(original_curve_len, 1e-6)
+    )
+    adjacent_turn_s = (
+        approach_len + normalized_turn_progress * adjacent_curve_len
+    )
+    original_exit_distance = path_s - approach_len - original_curve_len
+    adjacent_exit_s = approach_len + adjacent_curve_len + original_exit_distance
+    mapped_turn_s = jnp.where(
+        path_s < approach_len,
+        path_s,
+        jnp.where(
+            path_s < approach_len + original_curve_len,
+            adjacent_turn_s,
+            adjacent_exit_s,
+        ),
+    )
+
+    # Straight paths have no Bezier section, so their two lane progress
+    # coordinates are identical.
+    return jnp.where(maneuver == MANEUVER_STRAIGHT, path_s, mapped_turn_s)
+
+
 def _generate_reference(
     num_agents: int,
     num_points: int,
@@ -183,7 +243,7 @@ def _generate_reference(
     lane_idx: Array,
     reference_speed: Array,
     reference_start_s: Array,
-    ego_wheelbase: float = 1.75,
+    ego_wheelbase: float = EGO_WHEELBASE,
 ) -> Tuple[PathRefs, Array, Array]:
     """Generate a forward reference beginning at ego's initial path progress.
 
@@ -261,9 +321,23 @@ def _make_agents(
     maneuver: Array,
     lane_idx: Array,
 ) -> AgentState:
-    """Place ego vehicles at the phase-specific path progress."""
+    """Place ego vehicles at the phase-specific path progress.
+
+    SIDE is the bypass state: its logical progress remains within +/-4 m of the
+    static obstacle, but its physical pose lies on the adjacent lane path.  All
+    other phases initialize ego directly on its original reference path.
+    """
     speed_key, lateral_key = jr.split(key)
-    xy, heading, _, _ = _path_geometry(ego_s, start_road_idx, maneuver, lane_idx)
+    is_side = phase == PHASE_SIDE
+    adjacent_lane_idx = 1 - lane_idx
+    adjacent_s = _map_progress_to_adjacent_lane(
+        ego_s, start_road_idx, maneuver, lane_idx
+    )
+    physical_s = jnp.where(is_side, adjacent_s, ego_s)
+    physical_lane_idx = jnp.where(is_side, adjacent_lane_idx, lane_idx)
+    xy, heading, curvature, _ = _path_geometry(
+        physical_s, start_road_idx, maneuver, physical_lane_idx
+    )
     speeds_random = jr.uniform(
         speed_key,
         (num_agents,),
@@ -274,8 +348,14 @@ def _make_agents(
     lateral_noise = jr.uniform(lateral_key, (num_agents,), minval=-0.1, maxval=0.1)
     xys = xy[None, :] + lateral_noise[:, None] * _right_normal(heading)[None, :]
     headings = jnp.repeat(heading[None, :], num_agents, axis=0)
+    # A SIDE scene can start midway through a turn.  Initialize its steering to
+    # the adjacent curve's kinematic-bicycle value instead of forcing a zero
+    # steering angle that would immediately point the vehicle off that curve.
+    side_steering = jnp.arctan(EGO_WHEELBASE * curvature)
+    steering = jnp.where(is_side, side_steering, 0.0)
+    steerings = jnp.full((num_agents, 1), steering, dtype=jnp.float32)
     return jnp.concatenate(
-        [xys, headings, speeds[:, None], jnp.zeros((num_agents, 1), dtype=jnp.float32)],
+        [xys, headings, speeds[:, None], steerings],
         axis=1,
     )
 
