@@ -1,4 +1,5 @@
 from typing import Tuple
+import numpy as np
 import jax.numpy as jnp
 
 from typing_extensions import override
@@ -32,6 +33,7 @@ class MVELaneChangeAndOverTake_LowSpeed_ISSf_CBF_Dynamic2(MVELaneChangeAndOverTa
         "PASSED",
         "DONE",
         "YIELD_RESUME",
+        "EGO_FIRST",
     )
 
     def get_render_scene_label(self, graph: GraphsTuple) -> str:

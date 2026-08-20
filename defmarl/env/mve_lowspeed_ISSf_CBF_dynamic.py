@@ -32,6 +32,7 @@ class MVELaneChangeAndOverTake_LowSpeed_ISSf_CBF_Dynamic(MVELaneChangeAndOverTak
         "PASSED",
         "DONE",
         "YIELD_RESUME",
+        "EGO_FIRST",
     )
 
     def get_render_scene_label(self, graph: GraphsTuple) -> str:
