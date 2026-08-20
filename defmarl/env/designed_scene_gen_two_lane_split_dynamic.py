@@ -18,6 +18,7 @@ DYNAMIC_OBST_MAX_SPEED_RANGE_KMH = (10.0, 60.0)
 EGO_MIN_INITIAL_SPEED = 1.0 / 3.6
 _EGO_NOMINAL_ACCEL = 2.0
 _INITIAL_LONGITUDINAL_GAP = 10.0
+_APPROACH_MAX_INITIAL_GAP = 70.0
 _INITIAL_X_SOFT_MARGIN = 10.0
 # Phase probabilities, summing over the two reference types:
 # START=5%, APPROACH=25%, SIDE=15%, PASSED=15%, DONE=10%,
@@ -297,10 +298,11 @@ def _make_dynamic_obstacle(
         fast_accel_key,
         fast_speed_key,
         initial_order_key,
+        approach_gap_key,
         repair_agent_side_key,
         repair_static_side_key,
         repair_both_side_key,
-    ) = jr.split(key, 18)
+    ) = jr.split(key, 19)
     is_yield_resume = phase == _YIELD_RESUME
     is_ego_first = phase == _EGO_FIRST
     is_priority_interaction = jnp.logical_or(is_yield_resume, is_ego_first)
@@ -366,7 +368,15 @@ def _make_dynamic_obstacle(
     random_lane = jr.choice(lane_key, jnp.array([0, 1], dtype=jnp.int32), shape=())
 
     # Most samples place the moving vehicle in the lane available around the static obstacle.
-    dynamic_lane = jnp.where(mode == 0, 1 - static_lane, jnp.where(mode == 1, current_lane, random_lane))
+    dynamic_lane = jnp.where(
+        phase == _APPROACH,
+        random_lane,
+        jnp.where(
+            mode == 0,
+            1 - static_lane,
+            jnp.where(mode == 1, current_lane, random_lane),
+        ),
+    )
     time_low = jnp.where(phase <= _APPROACH, 2.5, 1.5)
     time_high = jnp.where(phase <= _APPROACH, 6.0, 4.5)
     interaction_time = jr.uniform(
@@ -396,10 +406,24 @@ def _make_dynamic_obstacle(
     initial_order_sign = jnp.where(
         jr.bernoulli(initial_order_key), 1.0, -1.0
     )
-    broad_initial_gap = jnp.clip(
+    # APPROACH is the broad static-obstacle bypass curriculum rather than a
+    # prescribed right-of-way interaction. Give its moving vehicle a much
+    # wider longitudinal spread so it does not collapse onto the two timed
+    # YIELD_RESUME/EGO_FIRST scenarios.
+    generic_initial_gap = jnp.clip(
         jnp.abs(dynamic_x - mean_agent_x),
         _INITIAL_LONGITUDINAL_GAP,
         45.0,
+    )
+    approach_initial_gap = jr.uniform(
+        approach_gap_key,
+        shape=(),
+        dtype=jnp.float32,
+        minval=_INITIAL_LONGITUDINAL_GAP,
+        maxval=_APPROACH_MAX_INITIAL_GAP,
+    )
+    broad_initial_gap = jnp.where(
+        phase == _APPROACH, approach_initial_gap, generic_initial_gap
     )
     balanced_dynamic_x = mean_agent_x + initial_order_sign * broad_initial_gap
     dynamic_x = jnp.where(
@@ -477,8 +501,8 @@ def _make_dynamic_obstacle(
         arrival_offset_key,
         shape=(),
         dtype=jnp.float32,
-        minval=0.5,
-        maxval=1.5,
+        minval=1.2,
+        maxval=2.0,
     )
     dynamic_arrival_time = jnp.where(
         is_yield_resume,
