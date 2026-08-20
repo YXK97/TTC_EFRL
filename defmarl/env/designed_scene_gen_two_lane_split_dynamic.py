@@ -325,7 +325,7 @@ def _make_dynamic_obstacle(
         shape=(),
         dtype=jnp.float32,
         minval=0.1,
-        maxval=2.0,
+        maxval=0.6,
     )
     slow_max_speed = jr.uniform(
         slow_speed_key,
@@ -501,8 +501,8 @@ def _make_dynamic_obstacle(
         arrival_offset_key,
         shape=(),
         dtype=jnp.float32,
-        minval=1.2,
-        maxval=2.0,
+        minval=2.4,
+        maxval=4.0,
     )
     dynamic_arrival_time = jnp.where(
         is_yield_resume,
