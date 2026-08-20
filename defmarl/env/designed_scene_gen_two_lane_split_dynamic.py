@@ -368,7 +368,7 @@ def _make_scene(
     lane_centers: Array,
 ):
     del yrange, lane_width
-    reference_key, static_key, agent_key, dynamic_key = jr.split(key, 4)
+    reference_key, static_key, agent_key, dynamic_key, translation_key = jr.split(key, 5)
     start_x, start_y, terminal_y, terminal_v, goals, derivatives = _make_reference(
         reference_key, lane_change, num_agents, num_ref_points, xrange, lane_centers
     )
@@ -408,7 +408,56 @@ def _make_scene(
         lane_centers,
     )
     obstacles = jnp.stack([static_state, dynamic_state], axis=0)
+
+    # Non-START phases otherwise cluster around the latter half of the road
+    # because their x positions are defined relative to the static obstacle.
+    # Translate the complete scene together so training also covers smaller
+    # absolute x values without changing any relative gaps or encounter timing.
+    range_width = xrange[1] - xrange[0]
+    target_agent_x = jr.uniform(
+        translation_key,
+        shape=(),
+        dtype=jnp.float32,
+        minval=xrange[0] + 0.25 * range_width,
+        maxval=xrange[0] + 0.45 * range_width,
+    )
+    x_translation = jnp.where(
+        phase == _START,
+        0.0,
+        jnp.maximum(jnp.mean(agents[:, 0]) - target_agent_x, 0.0),
+    )
+    agents = agents.at[:, 0].add(-x_translation)
+    obstacles = obstacles.at[:, 0].add(-x_translation)
+    goals = goals.at[:, :, 0].add(-x_translation)
     return agents, obstacles, goals, derivatives, dynamic_accel, dynamic_max_speed
+
+
+def _gen_scene_randomly_split_dynamic_with_id(
+    key: PRNGKey,
+    num_agents: int,
+    num_ref_points: int,
+    xrange: Array,
+    yrange: Array,
+    lane_width: float,
+    lane_centers: Array,
+):
+    """Generate a dynamic split scene and retain its sampled scene id."""
+    choose_key, scene_key = jr.split(key)
+    scene_id = jr.choice(choose_key, 2 * _NUM_PHASES, p=_SCENE_PROBS)
+    lane_change = scene_id < _NUM_PHASES
+    phase = scene_id % _NUM_PHASES
+    scene = _make_scene(
+        scene_key,
+        lane_change,
+        phase,
+        num_agents,
+        num_ref_points,
+        xrange,
+        yrange,
+        lane_width,
+        lane_centers,
+    )
+    return (*scene, scene_id)
 
 
 def gen_scene_randomly_split_dynamic(
@@ -421,14 +470,29 @@ def gen_scene_randomly_split_dynamic(
     lane_centers: Array,
 ):
     """Generate the six-phase dynamic split scene."""
-    choose_key, scene_key = jr.split(key)
-    scene_id = jr.choice(choose_key, 2 * _NUM_PHASES, p=_SCENE_PROBS)
-    lane_change = scene_id < _NUM_PHASES
-    phase = scene_id % _NUM_PHASES
-    return _make_scene(
-        scene_key,
-        lane_change,
-        phase,
+    return _gen_scene_randomly_split_dynamic_with_id(
+        key,
+        num_agents,
+        num_ref_points,
+        xrange,
+        yrange,
+        lane_width,
+        lane_centers,
+    )[:-1]
+
+
+def gen_scene_randomly_split_dynamic_with_id(
+    key: PRNGKey,
+    num_agents: int,
+    num_ref_points: int,
+    xrange: Array,
+    yrange: Array,
+    lane_width: float,
+    lane_centers: Array,
+):
+    """Generate a dynamic split scene and return its id for visualization."""
+    return _gen_scene_randomly_split_dynamic_with_id(
+        key,
         num_agents,
         num_ref_points,
         xrange,

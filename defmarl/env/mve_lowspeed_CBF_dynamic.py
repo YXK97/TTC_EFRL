@@ -4,7 +4,7 @@ import jax.numpy as jnp
 from typing_extensions import override
 
 from .designed_scene_gen_two_lane_split_dynamic import (
-    gen_scene_randomly_split_dynamic,
+    gen_scene_randomly_split_dynamic_with_id,
 )
 from .mve_lowspeed_CBF import MVELaneChangeAndOverTake_LowSpeed_CBF
 from defmarl.utils.graph import GraphsTuple
@@ -18,6 +18,7 @@ class MVEDynamicEnvState(NamedTuple):
     obstacle: State
     dynamic_obstacle_accel: Array
     dynamic_obstacle_max_speed: Array
+    scene_id: Array
 
     @property
     def n_agent(self) -> int:
@@ -57,8 +58,8 @@ class MVELaneChangeAndOverTake_LowSpeed_CBF_Dynamic(MVELaneChangeAndOverTake_Low
 
     @override
     def reset(self, key: Array) -> Tuple[GraphsTuple, jnp.ndarray]:
-        agents, obsts, all_goals, all_dsYddts, dynamic_accel, dynamic_max_speed = (
-            gen_scene_randomly_split_dynamic(
+        agents, obsts, all_goals, all_dsYddts, dynamic_accel, dynamic_max_speed, scene_id = (
+            gen_scene_randomly_split_dynamic_with_id(
                 key,
                 self.num_agents,
                 self.num_goals,
@@ -83,6 +84,7 @@ class MVELaneChangeAndOverTake_LowSpeed_CBF_Dynamic(MVELaneChangeAndOverTake_Low
             obsts,
             dynamic_accel,
             dynamic_max_speed,
+            scene_id,
         )
         return self.get_graph(env_state), dsYddts
 
@@ -135,6 +137,7 @@ class MVELaneChangeAndOverTake_LowSpeed_CBF_Dynamic(MVELaneChangeAndOverTake_Low
             next_obst_states,
             env_state.dynamic_obstacle_accel,
             env_state.dynamic_obstacle_max_speed,
+            env_state.scene_id,
         )
         reward = self.get_reward(graph, action)
         cost, cost_real = self.get_cost(graph, action)

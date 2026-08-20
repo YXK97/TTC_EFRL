@@ -19,6 +19,9 @@ from defmarl.env.mve_intersection import MVEIntersection
 from defmarl.env.mve_intersection_lowspeed_ISSf_CBF_dynamic import (
     MVEIntersection_LowSpeed_ISSf_CBF_Dynamic,
 )
+from defmarl.env.mve_intersection_lowspeed_ISSf_CBF_dynamic_WestEnter import (
+    MVEIntersection_LowSpeed_ISSf_CBF_Dynamic_WestEnter,
+)
 
 ENV = {
     'MVELaneChange': MVELaneChangeAndOverTake,
@@ -37,6 +40,7 @@ ENV = {
     'MVELaneChangeAndOverTake_LowSpeed_Bound': MVELaneChangeAndOverTake_LowSpeed_Bound,
     'MVEIntersection': MVEIntersection,
     'MVEIntersection_LowSpeed_ISSf_CBF_Dynamic': MVEIntersection_LowSpeed_ISSf_CBF_Dynamic,
+    'MVEIntersection_LowSpeed_ISSf_CBF_Dynamic_WestEnter': MVEIntersection_LowSpeed_ISSf_CBF_Dynamic_WestEnter,
 }
 
 

@@ -408,6 +408,23 @@ class LowSpeedAccelMixin(MVE):
         cost_text = ax.text(0.02, 1.00, "Cost: 1.0\nReward: 1.0", va="bottom", size=16, color="k", transform=ax.transAxes)
         kk_text = ax.text(0.99, 1.14, "kk=0", va="bottom", ha="right", size=16, color="k", transform=ax.transAxes)
         safe_text = ax.text(0.99, 1.05, "Unsafe: {}", va="bottom", ha="right", size=16, color="k", transform=ax.transAxes)
+        scene_label_fn = getattr(self, "get_render_scene_label", None)
+        scene_label = scene_label_fn(graph0) if callable(scene_label_fn) else None
+        scene_text = (
+            ax.text(
+                0.5,
+                1.14,
+                scene_label,
+                va="bottom",
+                ha="center",
+                size=18,
+                weight="bold",
+                color="k",
+                transform=ax.transAxes,
+            )
+            if scene_label
+            else None
+        )
 
         def update_pose(arrows, rects, states, bb_size, lr):
             h = np.asarray(self._normalize_heading(states[:, 2:4]))
@@ -435,7 +452,19 @@ class LowSpeedAccelMixin(MVE):
             if Ta_is_unsafe is not None and kk < len(Ta_is_unsafe):
                 safe_text.set_text("Unsafe: {}".format(np.where(Ta_is_unsafe[kk])[0]))
             kk_text.set_text("kk={:04}".format(kk))
-            return [col_edges, *agent_arrows, *agent_rects, *obst_arrows, *obst_rects, cost_text, safe_text, kk_text]
+            artists = [
+                col_edges,
+                *agent_arrows,
+                *agent_rects,
+                *obst_arrows,
+                *obst_rects,
+                cost_text,
+                safe_text,
+                kk_text,
+            ]
+            if scene_text is not None:
+                artists.append(scene_text)
+            return artists
 
         ani = FuncAnimation(fig, update, frames=len(T_graph.n_node), interval=1000 / 30.0, blit=True)
         try:

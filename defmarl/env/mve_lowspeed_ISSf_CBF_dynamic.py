@@ -1,4 +1,5 @@
 from typing import Tuple
+import numpy as np
 import jax.numpy as jnp
 
 from typing_extensions import override
@@ -23,6 +24,21 @@ class MVELaneChangeAndOverTake_LowSpeed_ISSf_CBF_Dynamic(MVELaneChangeAndOverTak
         # ISSf-specific so the ordinary dynamic CBF environment is unchanged.
         "pre_static_penalty": 0.5,
     })
+
+    _SCENE_PHASE_NAMES = (
+        "START",
+        "APPROACH",
+        "SIDE",
+        "PASSED",
+        "DONE",
+        "YIELD_RESUME",
+    )
+
+    def get_render_scene_label(self, graph: GraphsTuple) -> str:
+        scene_id = int(np.asarray(graph.env_states.scene_id))
+        reference_type = "LANE_CHANGE" if scene_id < len(self._SCENE_PHASE_NAMES) else "OVERTAKE"
+        phase = self._SCENE_PHASE_NAMES[scene_id % len(self._SCENE_PHASE_NAMES)]
+        return f"Scene: {reference_type} / {phase}"
 
     @override
     def get_cost(self, graph: GraphsTuple, action: Action) -> Tuple[Cost, Cost]:

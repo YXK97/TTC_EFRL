@@ -25,6 +25,21 @@ class MVELaneChangeAndOverTake_LowSpeed_ISSf_CBF_Dynamic2(MVELaneChangeAndOverTa
         "pre_static_penalty": 0.05,
     })
 
+    _SCENE_PHASE_NAMES = (
+        "START",
+        "APPROACH",
+        "SIDE",
+        "PASSED",
+        "DONE",
+        "YIELD_RESUME",
+    )
+
+    def get_render_scene_label(self, graph: GraphsTuple) -> str:
+        scene_id = int(np.asarray(graph.env_states.scene_id))
+        reference_type = "LANE_CHANGE" if scene_id < len(self._SCENE_PHASE_NAMES) else "OVERTAKE"
+        phase = self._SCENE_PHASE_NAMES[scene_id % len(self._SCENE_PHASE_NAMES)]
+        return f"Scene: {reference_type} / {phase}"
+
     @override
     def get_cost(self, graph: GraphsTuple, action: Action) -> Tuple[Cost, Cost]:
         return MVELaneChangeAndOverTake_LowSpeed_ISSf_CBF.get_cost(self, graph, action)

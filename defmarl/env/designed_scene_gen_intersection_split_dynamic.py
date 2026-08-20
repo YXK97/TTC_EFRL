@@ -490,10 +490,21 @@ def _make_scene(
     maneuver: Array,
     relation: Array,
     phase: Array,
+    fixed_start_road_idx: Optional[Array] = None,
 ) -> Tuple[AgentState, ObstState, PathRefs, Array, Array, Array]:
-    """Build one complete scene with two obstacles and fixed output shapes."""
+    """Build one complete scene with two obstacles and fixed output shapes.
+
+    The default remains a uniformly sampled entrance.  A separate environment
+    may provide ``fixed_start_road_idx`` to reduce route diversity without
+    duplicating any ego, reference, or obstacle generation logic.
+    """
     road_key, lane_key, speed_key, progress_key, agent_key, dynamic_key = jr.split(key, 6)
-    start_road_idx = jr.randint(road_key, (), minval=0, maxval=4)
+    sampled_start_road_idx = jr.randint(road_key, (), minval=0, maxval=4)
+    start_road_idx = (
+        sampled_start_road_idx
+        if fixed_start_road_idx is None
+        else jnp.asarray(fixed_start_road_idx, dtype=jnp.int32)
+    )
     lane_idx = jr.randint(lane_key, (), minval=0, maxval=2)
     reference_speed = jr.uniform(
         speed_key,
@@ -546,6 +557,8 @@ class IntersectionSplitDynamicScene:
         maneuver: Optional[int] = None,
         dynamic_relation: Optional[int] = None,
         phase: Optional[int] = None,
+        fixed_start_road_idx: Optional[int] = None,
+        maneuver_probs: Optional[Tuple[float, float, float]] = None,
     ):
         # xrange/yrange/lane arguments remain in the constructor for compatibility
         # with the designed-scene interface.  Intersection geometry is asymmetric
@@ -557,19 +570,35 @@ class IntersectionSplitDynamicScene:
         self.maneuver = maneuver
         self.dynamic_relation = dynamic_relation
         self.phase = phase
+        self.fixed_start_road_idx = fixed_start_road_idx
+        self.maneuver_probs = maneuver_probs
 
     def make(self) -> Tuple[AgentState, ObstState, PathRefs, Array, Array, Array]:
         choose_key, scene_key = jr.split(self.key)
         scene_id_key, turn_key, relation_key = jr.split(choose_key, 3)
         scene_id = jr.choice(scene_id_key, 10, p=SCENE_PROBS)
-        sampled_turn = jr.choice(
-            turn_key,
-            jnp.array([MANEUVER_LEFT, MANEUVER_RIGHT], dtype=jnp.int32),
-            p=TURN_DIRECTION_PROBS,
-        )
-        sampled_maneuver = jnp.where(
-            scene_id < 5, sampled_turn, MANEUVER_STRAIGHT
-        )
+        if self.maneuver_probs is None:
+            # Preserve the original generator exactly: half of the scenes are
+            # straight, while the turning half is split equally left/right.
+            sampled_turn = jr.choice(
+                turn_key,
+                jnp.array([MANEUVER_LEFT, MANEUVER_RIGHT], dtype=jnp.int32),
+                p=TURN_DIRECTION_PROBS,
+            )
+            sampled_maneuver = jnp.where(
+                scene_id < 5, sampled_turn, MANEUVER_STRAIGHT
+            )
+        else:
+            # Fixed-entry curricula can choose maneuver independently from the
+            # phase encoded by scene_id, retaining the same phase marginals.
+            sampled_maneuver = jr.choice(
+                turn_key,
+                jnp.array(
+                    [MANEUVER_LEFT, MANEUVER_STRAIGHT, MANEUVER_RIGHT],
+                    dtype=jnp.int32,
+                ),
+                p=jnp.asarray(self.maneuver_probs, dtype=jnp.float32),
+            )
         maneuver = (
             sampled_maneuver
             if self.maneuver is None
@@ -592,6 +621,7 @@ class IntersectionSplitDynamicScene:
             maneuver,
             relation,
             phase,
+            fixed_start_road_idx=self.fixed_start_road_idx,
         )
 
 

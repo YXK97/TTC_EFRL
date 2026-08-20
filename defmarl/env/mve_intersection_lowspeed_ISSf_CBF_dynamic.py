@@ -244,6 +244,18 @@ class MVEIntersection_LowSpeed_ISSf_CBF_Dynamic(
     def cost_components(self) -> Tuple[str, ...]:
         return "agent collisions", "obs collisions", "bound collisions"
 
+    def _generate_scene(self, key: Array):
+        """Generate reset data; fixed-entry subclasses override only this hook."""
+        return gen_scene_randomly_split_dynamic(
+            key,
+            self.num_agents,
+            self.num_goals,
+            self.params["default_state_range"][:2],
+            self.params["default_state_range"][2:4],
+            self.params["lane_width"],
+            self.params["lane_centers"],
+        )
+
     @override
     def reset(self, key: Array) -> Tuple[GraphsTuple, Array]:
         (
@@ -253,15 +265,7 @@ class MVEIntersection_LowSpeed_ISSf_CBF_Dynamic(
             all_derivatives,
             dynamic_accel,
             dynamic_target_speed,
-        ) = gen_scene_randomly_split_dynamic(
-            key,
-            self.num_agents,
-            self.num_goals,
-            self.params["default_state_range"][:2],
-            self.params["default_state_range"][2:4],
-            self.params["lane_width"],
-            self.params["lane_centers"],
-        )
+        ) = self._generate_scene(key)
         self.all_goals = all_goals
         self.all_dsYddts = all_derivatives
         goal_indices = find_closest_goal_indices(
