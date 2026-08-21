@@ -50,10 +50,10 @@ class MVELaneChangeAndOverTake_LowSpeed_ISSf_CBF_Dynamic(MVELaneChangeAndOverTak
         agent = self._observable(graph.env_states.agent)
         goal = self._observable(graph.env_states.goal)
         e = agent - goal
-        W = jnp.diag(jnp.array([1e-3, 1e-3, 0, 0, 1e-3, 0]))
+        W = jnp.diag(jnp.array([1e-3, 1e-3, 0, 0, 2e-4, 0]))
         reward = -jnp.sqrt(jnp.einsum("ai,ij,ja->a", e, W, e.transpose())).mean()
-        reward -= (action[:, 0] ** 2).mean() * 0.0001
-        reward -= (action[:, 1] ** 2).mean() * 0.0001
+        # reward -= (action[:, 0] ** 2).mean() * 0.0001
+        # reward -= (action[:, 1] ** 2).mean() * 0.0001
         static_x = graph.env_states.obstacle[0, 0]
         ego_not_past_static = (agent[:, 0] <= static_x).astype(jnp.float32)
         reward -= self.params["pre_static_penalty"] * ego_not_past_static.mean()
