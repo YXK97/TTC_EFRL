@@ -23,7 +23,10 @@ from defmarl.utils.typing import AgentState, Array, ObstState, PathRefs, PRNGKey
 # +/-50 m is the nominal scene-generation window.  Roads and references do not
 # terminate there; both continue beyond this window during rollout.
 ROAD_HALF = 50.0
-TURN_HALF = 12.5
+# A wider central turning region produces gentler left/right trajectories for
+# the initial trajectory-tracking curriculum.  With the current lane offsets,
+# TURN_HALF=20 m yields turn radii of approximately 18-22 m.
+TURN_HALF = 20.0
 POINT_INTERVAL = 0.1
 
 MAIN_LANE_WIDTH = 3.7
@@ -31,7 +34,9 @@ AUX_LANE_WIDTH = 3.3
 MAIN_LANE_CENTERS = jnp.array([-MAIN_LANE_WIDTH / 2.0, MAIN_LANE_WIDTH / 2.0], dtype=jnp.float32)
 AUX_LANE_CENTERS = jnp.array([-AUX_LANE_WIDTH / 2.0, AUX_LANE_WIDTH / 2.0], dtype=jnp.float32)
 
-REFERENCE_SPEED_RANGE_KMH = (10.0, 40.0)
+# Match the established two-lane low-speed generator.  This is the fixed target
+# speed stored in every point of one scene's ego reference trajectory.
+REFERENCE_SPEED_RANGE_KMH = (20.0, 40.0)
 EGO_MIN_INITIAL_SPEED = 1.0 / 3.6
 EGO_WHEELBASE = 1.75
 DYNAMIC_INITIAL_SPEED_RANGE_KMH = (10.0, 40.0)
@@ -59,10 +64,17 @@ PHASE_SIDE = 2
 PHASE_PASSED = 3
 PHASE_DONE = 4
 
+NUM_ROADS = 4
+NUM_MANEUVERS = 3
+NUM_DYNAMIC_RELATIONS = 3
+NUM_PHASES = 5
+
 # The first five IDs are turning scenes and the second five are straight scenes;
-# ID % 5 is the
-# split phase.  A turning scene samples left/right with equal probability.
-SCENE_PROBS = jnp.array([0.075, 0.175, 0.1, 0.1, 0.05] * 2, dtype=jnp.float32)
+# ID % 5 is the split phase.  Summing both reference types gives phase marginals
+# START/APPROACH/SIDE/PASSED/DONE = 0.20/0.35/0.20/0.17/0.08.  Compared with
+# the previous distribution, START is slightly more common while PASSED and
+# DONE are reduced.
+SCENE_PROBS = jnp.array([0.1, 0.175, 0.1, 0.085, 0.04] * 2, dtype=jnp.float32)
 TURN_DIRECTION_PROBS = jnp.array([0.5, 0.5], dtype=jnp.float32)
 DYNAMIC_RELATION_PROBS = jnp.array([1.0 / 3.0] * 3, dtype=jnp.float32)
 
@@ -491,7 +503,7 @@ def _make_scene(
     relation: Array,
     phase: Array,
     fixed_start_road_idx: Optional[Array] = None,
-) -> Tuple[AgentState, ObstState, PathRefs, Array, Array, Array]:
+) -> Tuple[AgentState, ObstState, PathRefs, Array, Array, Array, Array]:
     """Build one complete scene with two obstacles and fixed output shapes.
 
     The default remains a uniformly sampled entrance.  A separate environment
@@ -539,7 +551,25 @@ def _make_scene(
         static_obstacle,
     )
     obstacles = jnp.stack([static_obstacle, dynamic_obstacle], axis=0)
-    return agents, obstacles, goals, derivatives, dynamic_accel, dynamic_target_speed
+    # Encode all categorical choices into one scalar so the environment can
+    # carry them through rollout without adding non-numeric Python metadata.
+    # Decoding proceeds in reverse order: phase, relation, maneuver, road.
+    scene_id = (
+        (
+            start_road_idx * NUM_MANEUVERS
+            + maneuver
+        ) * NUM_DYNAMIC_RELATIONS
+        + relation
+    ) * NUM_PHASES + phase
+    return (
+        agents,
+        obstacles,
+        goals,
+        derivatives,
+        dynamic_accel,
+        dynamic_target_speed,
+        scene_id,
+    )
 
 
 class IntersectionSplitDynamicScene:
@@ -573,7 +603,10 @@ class IntersectionSplitDynamicScene:
         self.fixed_start_road_idx = fixed_start_road_idx
         self.maneuver_probs = maneuver_probs
 
-    def make(self) -> Tuple[AgentState, ObstState, PathRefs, Array, Array, Array]:
+    def make_with_id(
+        self,
+    ) -> Tuple[AgentState, ObstState, PathRefs, Array, Array, Array, Array]:
+        """Build a scene and include its encoded category for rendering."""
         choose_key, scene_key = jr.split(self.key)
         scene_id_key, turn_key, relation_key = jr.split(choose_key, 3)
         scene_id = jr.choice(scene_id_key, 10, p=SCENE_PROBS)
@@ -623,6 +656,10 @@ class IntersectionSplitDynamicScene:
             phase,
             fixed_start_road_idx=self.fixed_start_road_idx,
         )
+
+    def make(self) -> Tuple[AgentState, ObstState, PathRefs, Array, Array, Array]:
+        """Build a scene using the original six-value public interface."""
+        return self.make_with_id()[:-1]
 
 
 class IntersectionSameDirectionDynamicScene:
@@ -689,6 +726,27 @@ def gen_scene_randomly_split_dynamic(
         lane_width,
         lane_centers,
     ).make()
+
+
+def gen_scene_randomly_split_dynamic_with_id(
+    key: PRNGKey,
+    num_agents: int,
+    num_ref_points: int,
+    xrange: Array,
+    yrange: Array,
+    lane_width: float,
+    lane_centers: Array,
+):
+    """Generate an intersection scene and retain its category for rendering."""
+    return IntersectionSplitDynamicScene(
+        key,
+        num_agents,
+        num_ref_points,
+        xrange,
+        yrange,
+        lane_width,
+        lane_centers,
+    ).make_with_id()
 
 
 def gen_scene_randomly_split(

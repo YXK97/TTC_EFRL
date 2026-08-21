@@ -9,6 +9,7 @@ vehicles are created.
 import functools as ft
 import pathlib
 from typing import NamedTuple, Optional, Tuple
+from defmarl.utils.typing import Reward
 
 import jax
 import jax.numpy as jnp
@@ -22,9 +23,12 @@ from .designed_scene_gen_intersection_split_dynamic import (
     AUX_LANE_WIDTH,
     MAIN_LANE_CENTERS,
     MAIN_LANE_WIDTH,
+    NUM_DYNAMIC_RELATIONS,
+    NUM_MANEUVERS,
+    NUM_PHASES,
     ROAD_HALF,
     TURN_HALF,
-    gen_scene_randomly_split_dynamic,
+    gen_scene_randomly_split_dynamic_with_id,
 )
 from .mve_lowspeed_CBF_dynamic import MVELaneChangeAndOverTake_LowSpeed_CBF_Dynamic
 from defmarl.utils.graph import GraphsTuple
@@ -53,6 +57,7 @@ class MVEIntersectionLowSpeedDynamicState(NamedTuple):
     obstacle: State
     dynamic_obstacle_accel: Array
     dynamic_obstacle_target_speed: Array
+    scene_id: Array
 
     @property
     def n_agent(self) -> int:
@@ -173,6 +178,20 @@ class MVEIntersection_LowSpeed_ISSf_CBF_Dynamic(
     added later without changing the scene or graph contracts.
     """
 
+    # Trajectory-tracking ablation: disable every explicit safety signal,
+    # regardless of whether it would be computed by ISSf-CBF, ordinary CBF, or
+    # raw scaling factors.  Obstacle graph nodes remain observations, but there
+    # are no road-boundary graph nodes in this inheritance branch.  Neither the
+    # obstacles nor polygon boundaries produce a cost, unsafe flag, reward
+    # penalty, or termination.  As a Python class constant, this removes all
+    # safety calculations at trace time while retaining their implementation.
+    SAFETY_SIGNALS_ENABLED = False
+
+    _ROAD_NAMES = ("SOUTH ENTER", "EAST ENTER", "NORTH ENTER", "WEST ENTER")
+    _MANEUVER_NAMES = ("LEFT", "RIGHT", "STRAIGHT")
+    _RELATION_NAMES = ("SAME_DIRECTION", "OPPOSITE_DIRECTION", "PERPENDICULAR")
+    _PHASE_NAMES = ("START", "APPROACH", "SIDE", "PASSED", "DONE")
+
     PARAMS = MVELaneChangeAndOverTake_LowSpeed_CBF_Dynamic.PARAMS.copy()
     PARAMS.update(
         {
@@ -244,9 +263,23 @@ class MVEIntersection_LowSpeed_ISSf_CBF_Dynamic(
     def cost_components(self) -> Tuple[str, ...]:
         return "agent collisions", "obs collisions", "bound collisions"
 
+    def get_render_scene_label(self, graph: GraphsTuple) -> str:
+        """Decode rollout metadata into a stable, human-readable scene label."""
+        scene_id = int(np.asarray(graph.env_states.scene_id))
+        phase = scene_id % NUM_PHASES
+        scene_id //= NUM_PHASES
+        relation = scene_id % NUM_DYNAMIC_RELATIONS
+        scene_id //= NUM_DYNAMIC_RELATIONS
+        maneuver = scene_id % NUM_MANEUVERS
+        road = scene_id // NUM_MANEUVERS
+        return (
+            f"Scene: {self._ROAD_NAMES[road]} / {self._MANEUVER_NAMES[maneuver]}"
+            f" / {self._PHASE_NAMES[phase]} / {self._RELATION_NAMES[relation]}"
+        )
+
     def _generate_scene(self, key: Array):
         """Generate reset data; fixed-entry subclasses override only this hook."""
-        return gen_scene_randomly_split_dynamic(
+        return gen_scene_randomly_split_dynamic_with_id(
             key,
             self.num_agents,
             self.num_goals,
@@ -265,6 +298,7 @@ class MVEIntersection_LowSpeed_ISSf_CBF_Dynamic(
             all_derivatives,
             dynamic_accel,
             dynamic_target_speed,
+            scene_id,
         ) = self._generate_scene(key)
         self.all_goals = all_goals
         self.all_dsYddts = all_derivatives
@@ -281,6 +315,7 @@ class MVEIntersection_LowSpeed_ISSf_CBF_Dynamic(
             obstacles,
             dynamic_accel,
             dynamic_target_speed,
+            scene_id,
         )
         return self.get_graph(env_state), derivatives
 
@@ -339,6 +374,7 @@ class MVEIntersection_LowSpeed_ISSf_CBF_Dynamic(
             next_obstacles,
             env_state.dynamic_obstacle_accel,
             env_state.dynamic_obstacle_target_speed,
+            env_state.scene_id,
         )
         reward = self.get_reward(graph, action)
         cost, cost_real = self.get_cost(graph, action)
@@ -351,6 +387,17 @@ class MVEIntersection_LowSpeed_ISSf_CBF_Dynamic(
             jnp.array(False),
             {},
         )
+
+    @override
+    def get_reward(self, graph: GraphsTuple, action: Action) -> Reward:
+        agent = self._observable(graph.env_states.agent)
+        goal = self._observable(graph.env_states.goal)
+        e = agent - goal
+        W = jnp.diag(jnp.array([1e-3, 1e-3, 0, 0, 1e-3, 0]))
+        reward = -jnp.sqrt(jnp.einsum("ai,ij,ja->a", e, W, e.transpose())).mean()
+        # reward -= (action[:, 0] ** 2).mean() * 0.0001
+        # reward -= (action[:, 1] ** 2).mean() * 0.0001
+        return reward
 
     def _intersection_alpha(self, state: State) -> Array:
         """Scaling factor shared by real collision, CBF, and ISSf terms."""
@@ -420,6 +467,16 @@ class MVEIntersection_LowSpeed_ISSf_CBF_Dynamic(
         instantaneous-stationary approximation for dynamic obstacles.
         """
         num_agents = graph.env_states.agent.shape[0]
+        if not self.SAFETY_SIGNALS_ENABLED:
+            # Keep the normal three-component interface so trainer, logging and
+            # rendering shapes remain unchanged during trajectory-only training.
+            fixed_cost = -jnp.ones(
+                (num_agents, self.n_cost), dtype=jnp.float32
+            )
+            return fixed_cost, fixed_cost
+
+        # Original ISSf-CBF implementation retained below but excluded from the
+        # JAX program while SAFETY_SIGNALS_ENABLED is False.
         num_obstacles = graph.env_states.obstacle.shape[0]
         steering = self._filter_delta(graph.env_states.agent[:, 5], action[:, 1])
 
@@ -474,10 +531,17 @@ class MVEIntersection_LowSpeed_ISSf_CBF_Dynamic(
 
     def _scaling_cost_intersection(self, graph: GraphsTuple) -> Tuple[Cost, Cost]:
         """Action-independent alpha costs used by ``unsafe_mask``."""
-        threshold = self.params["alpha_thresh"]
         agents = graph.env_states.agent
-        obstacles = graph.env_states.obstacle
         num_agents = agents.shape[0]
+        if not self.SAFETY_SIGNALS_ENABLED:
+            fixed_cost = -jnp.ones(
+                (num_agents, self.n_cost), dtype=jnp.float32
+            )
+            return fixed_cost, fixed_cost
+
+        # Original polygon/obstacle scaling implementation retained below.
+        threshold = self.params["alpha_thresh"]
+        obstacles = graph.env_states.obstacle
         num_obstacles = obstacles.shape[0]
         agent_cost = -jnp.ones((num_agents,), dtype=jnp.float32)
         agent_real = -jnp.ones((num_agents,), dtype=jnp.float32)
@@ -507,6 +571,10 @@ class MVEIntersection_LowSpeed_ISSf_CBF_Dynamic(
     @override
     @ft.partial(jax.jit, static_argnums=(0,))
     def unsafe_mask(self, graph: GraphsTuple) -> Array:
+        if not self.SAFETY_SIGNALS_ENABLED:
+            return jnp.zeros(
+                (graph.env_states.agent.shape[0],), dtype=jnp.bool_
+            )
         _, cost_real = self._scaling_cost_intersection(graph)
         return jnp.any(cost_real >= 0.0, axis=-1)
 
@@ -548,6 +616,10 @@ class MVEIntersection_LowSpeed_ISSf_CBF_Dynamic(
         view_half = road_half + 5.0
 
         fig, ax = plt.subplots(1, 1, figsize=(10, 10), dpi=120)
+        # Reserve enough canvas above the axes for the centered scene label and
+        # the existing cost/status blocks.  Without this margin, long labels are
+        # clipped by the encoded video frame.
+        fig.subplots_adjust(top=0.84)
         ax.set_xlim(-view_half, view_half)
         ax.set_ylim(-view_half, view_half)
         ax.set_aspect("equal")
@@ -675,6 +747,17 @@ class MVEIntersection_LowSpeed_ISSf_CBF_Dynamic(
             size=14,
             color="k",
         )
+        scene_text = ax.text(
+            0.5,
+            1.14,
+            self.get_render_scene_label(graph0),
+            transform=ax.transAxes,
+            va="bottom",
+            ha="center",
+            size=16,
+            weight="bold",
+            color="k",
+        )
 
         def update_pose(arrows, rectangles, states, bb_size, rear_offset):
             headings = np.asarray(self._normalize_heading(states[:, 2:4]))
@@ -736,6 +819,7 @@ class MVEIntersection_LowSpeed_ISSf_CBF_Dynamic(
                 cost_text,
                 step_text,
                 unsafe_text,
+                scene_text,
             ]
 
         animation = FuncAnimation(

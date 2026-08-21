@@ -74,6 +74,27 @@ def gen_scene_randomly_split_dynamic_WestEnter(
     ).make()
 
 
+def gen_scene_randomly_split_dynamic_WestEnter_with_id(
+    key: PRNGKey,
+    num_agents: int,
+    num_ref_points: int,
+    xrange: Array,
+    yrange: Array,
+    lane_width: float,
+    lane_centers: Array,
+) -> Tuple[AgentState, ObstState, PathRefs, Array, Array, Array, Array]:
+    """Generate a west-entry scene and retain its category for rendering."""
+    return IntersectionSplitDynamicWestEnterScene(
+        key,
+        num_agents,
+        num_ref_points,
+        xrange,
+        yrange,
+        lane_width,
+        lane_centers,
+    ).make_with_id()
+
+
 # Keep the conventional generator names available inside this dedicated module.
 gen_scene_randomly_split_dynamic = gen_scene_randomly_split_dynamic_WestEnter
 gen_scene_randomly_split = gen_scene_randomly_split_dynamic_WestEnter
