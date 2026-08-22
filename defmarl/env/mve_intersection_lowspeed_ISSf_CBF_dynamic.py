@@ -185,7 +185,7 @@ class MVEIntersection_LowSpeed_ISSf_CBF_Dynamic(
     # obstacles nor polygon boundaries produce a cost, unsafe flag, reward
     # penalty, or termination.  As a Python class constant, this removes all
     # safety calculations at trace time while retaining their implementation.
-    SAFETY_SIGNALS_ENABLED = False
+    SAFETY_SIGNALS_ENABLED = True
 
     _ROAD_NAMES = ("SOUTH ENTER", "EAST ENTER", "NORTH ENTER", "WEST ENTER")
     _MANEUVER_NAMES = ("LEFT", "RIGHT", "STRAIGHT")
