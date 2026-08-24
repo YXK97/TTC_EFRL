@@ -16,6 +16,11 @@ from defmarl.utils.typing import Action, Cost, Reward
 class MVELaneChangeAndOverTake_LowSpeed_ISSf_CBF_Dynamic2(MVELaneChangeAndOverTake_LowSpeed_CBF_Dynamic):
     """Dynamic-obstacle low-speed environment with ego-only ISSf-CBF costs."""
 
+    # Keep the gamma=5 variant geometrically identical to the gamma=100
+    # variant: both use direct unbounded road half-planes for ISSf-CBF bounds.
+    USE_UNBOUNDED_ISSF_ROAD_BOUNDS = True
+    USE_PARAMETERIZED_ISSF_OBSTACLE_SCALING = True
+
     PARAMS = MVELaneChangeAndOverTake_LowSpeed_CBF_Dynamic.PARAMS.copy()
     PARAMS.update({
         "obst_bb_size": jnp.array([4, 2]),

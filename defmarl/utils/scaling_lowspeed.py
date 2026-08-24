@@ -5,6 +5,7 @@ from .typing import Array, Pos2d, State
 
 # 全局数值稳定极小值（核心：防止除零/NaN）
 EPS = 1e-6
+RAY_VALIDITY_TOL = 1e-6
 
 def safe_norm(x, axis=-1):
     return jnp.sqrt(jnp.sum(x ** 2, axis=axis) + EPS)
@@ -17,6 +18,71 @@ def safe_divide(numerator: Array, denominator: Array, eps: float = EPS) -> Array
         jnp.where(denominator >= 0.0, eps, -eps),
     )
     return numerator / safe_denominator
+
+
+@jax.jit
+def ray_convex_entry_scaling(
+    origin: Pos2d,
+    target: Pos2d,
+    A: Array,
+    b: Array,
+) -> Array:
+    """Return the first ray parameter entering ``A @ x <= b``.
+
+    The target is located at parameter one, so the entry parameter is directly
+    the first ray-group scaling ratio.  Computing the feasible parameter
+    interval avoids large fill coordinates and the discontinuous second pass
+    that validates constructed Cartesian intersections.
+    """
+    normal_norms = jnp.maximum(jnp.linalg.norm(A, axis=1), EPS)
+    normalized_A = A / normal_norms[:, None]
+    normalized_b = b / normal_norms
+    direction = target - origin
+    denominator = normalized_A @ direction
+    numerator = normalized_b - normalized_A @ origin
+    nonparallel = jnp.abs(denominator) > EPS
+    safe_denominator = jnp.where(nonparallel, denominator, 1.0)
+    ratio = numerator / safe_denominator
+
+    lower = jnp.max(jnp.where(denominator < -EPS, ratio, -jnp.inf))
+    upper = jnp.min(jnp.where(denominator > EPS, ratio, jnp.inf))
+    entry = jnp.maximum(lower, 0.0)
+    parallel_feasible = jnp.all(
+        jnp.where(nonparallel, True, numerator >= -RAY_VALIDITY_TOL)
+    )
+    interval_nonempty = (entry <= upper + RAY_VALIDITY_TOL) & (
+        upper >= -RAY_VALIDITY_TOL
+    )
+    return jnp.where(parallel_feasible & interval_nonempty, entry, jnp.inf)
+
+
+@jax.jit
+def ray_rectangle_extreme_scaling(
+    origin: Pos2d,
+    extreme_point: Pos2d,
+    rectangle_A: Array,
+    rectangle_b: Array,
+) -> Array:
+    """Return ``||O G|| / ||O F||`` from the rectangle exit parameter."""
+    normal_norms = jnp.maximum(jnp.linalg.norm(rectangle_A, axis=1), EPS)
+    normalized_A = rectangle_A / normal_norms[:, None]
+    normalized_b = rectangle_b / normal_norms
+    direction = extreme_point - origin
+    denominator = normalized_A @ direction
+    numerator = normalized_b - normalized_A @ origin
+    exits_forward = denominator > EPS
+    safe_denominator = jnp.where(exits_forward, denominator, 1.0)
+    exit_candidates = jnp.where(
+        exits_forward, numerator / safe_denominator, jnp.inf
+    )
+    exit_parameter = jnp.min(exit_candidates)
+    direction_valid = jnp.linalg.norm(direction) > EPS
+    exit_valid = jnp.isfinite(exit_parameter) & (exit_parameter > EPS)
+    return jnp.where(
+        direction_valid & exit_valid,
+        1.0 / jnp.maximum(exit_parameter, EPS),
+        0.0,
+    )
 
 @jax.jit
 def compute_intersections(O: Pos2d, V: Pos2d, A, b, fill: Pos2d) -> Array:
@@ -157,6 +223,117 @@ def scaling_calc(s1: State, s2: State, bb1: Array, lr1: Array, bb2: Array, lr2: 
 
     alpha = O_in_S2 * scaling
     return alpha
+
+
+@jax.jit
+def scaling_calc_parameterized(
+    s1: State,
+    s2: State,
+    bb1: Array,
+    lr1: Array,
+    bb2: Array,
+    lr2: Array,
+) -> Array:
+    """Stable two-rectangle scaling using parameterized rays.
+
+    This is geometrically equivalent to ``scaling_calc`` and retains the
+    theoretical hard minimum over both ray groups.  It avoids explicitly
+    constructing edge intersections, large fill points, and absolute-position
+    dependent line normalization.
+    """
+    origin_1 = rear_to_center(s1, lr1)
+    origin_2 = rear_to_center(s2, lr2)
+    rotation_1 = heading_rot_matrix(s1)
+    rotation_2 = heading_rot_matrix(s2)
+    rectangle_template = jnp.array(
+        [[1.0, 0.0], [-1.0, 0.0], [0.0, 1.0], [0.0, -1.0]]
+    )
+    local_vertices_1 = jnp.array(
+        [
+            [bb1[0] / 2.0, bb1[1] / 2.0],
+            [bb1[0] / 2.0, -bb1[1] / 2.0],
+            [-bb1[0] / 2.0, bb1[1] / 2.0],
+            [-bb1[0] / 2.0, -bb1[1] / 2.0],
+        ]
+    )
+    local_vertices_2 = jnp.array(
+        [
+            [bb2[0] / 2.0, bb2[1] / 2.0],
+            [bb2[0] / 2.0, -bb2[1] / 2.0],
+            [-bb2[0] / 2.0, bb2[1] / 2.0],
+            [-bb2[0] / 2.0, -bb2[1] / 2.0],
+        ]
+    )
+    vertices_1 = origin_1 + local_vertices_1 @ rotation_1.T
+    vertices_2 = origin_2 + local_vertices_2 @ rotation_2.T
+    A1 = rectangle_template @ rotation_1.T
+    A2 = rectangle_template @ rotation_2.T
+    b1_local = jnp.array(
+        [bb1[0] / 2.0, bb1[0] / 2.0, bb1[1] / 2.0, bb1[1] / 2.0]
+    )
+    b2_local = jnp.array(
+        [bb2[0] / 2.0, bb2[0] / 2.0, bb2[1] / 2.0, bb2[1] / 2.0]
+    )
+    b1 = b1_local + A1 @ origin_1
+    b2 = b2_local + A2 @ origin_2
+
+    vertex_ray_scaling = jnp.min(
+        jax.vmap(ray_convex_entry_scaling, in_axes=(None, 0, None, None))(
+            origin_1, vertices_1, A2, b2
+        )
+    )
+    extreme_ray_scaling = jnp.min(
+        jax.vmap(
+            ray_rectangle_extreme_scaling,
+            in_axes=(None, 0, None, None),
+        )(origin_1, vertices_2, A1, b1)
+    )
+    scaling = jnp.minimum(vertex_ray_scaling, extreme_ray_scaling)
+    # ``ray_convex_entry_scaling`` returns zero when the scaling origin is
+    # already inside P2.  The historical sigmoid(1e6 * gamma_0) gate is thus
+    # redundant here and creates an artificial gradient spike at gamma_0=0.
+    return jnp.nan_to_num(scaling, nan=0.0, posinf=1e6, neginf=0.0)
+
+
+@jax.jit
+def scaling_calc_unbounded_bound(
+    state: State,
+    bb_size: Array,
+    rear_to_center_offset: Array,
+    A: Array,
+    b: Array,
+) -> Array:
+    """Compute scaling against an unbounded forbidden convex polygon.
+
+    ``A @ x <= b`` describes the forbidden region.  A straight-road upper or
+    lower boundary is a half-plane and has no finite extreme points.  Thus the
+    ray-casting algorithm's ``n_g == 0`` branch applies: cast rays from the ego
+    scaling origin through its four vertices, intersect them with the polygon,
+    and take the minimum distance ratio.  No virtual rectangle, and therefore
+    no artificial second group of corner rays, is introduced.
+    """
+    origin = rear_to_center(state, rear_to_center_offset)
+    rotation = heading_rot_matrix(state)
+    local_vertices = jnp.array(
+        [
+            [bb_size[0] / 2.0, bb_size[1] / 2.0],
+            [bb_size[0] / 2.0, -bb_size[1] / 2.0],
+            [-bb_size[0] / 2.0, bb_size[1] / 2.0],
+            [-bb_size[0] / 2.0, -bb_size[1] / 2.0],
+        ]
+    )
+    vertices = origin + local_vertices @ rotation.T
+    vertex_ray_scaling = jnp.min(
+        jax.vmap(ray_convex_entry_scaling, in_axes=(None, 0, None, None))(
+            origin, vertices, A, b
+        )
+    )
+
+    # The entry parameter is exactly zero when the origin is already inside
+    # the forbidden half-plane, so no steep center-membership gate is needed.
+    return jnp.nan_to_num(
+        vertex_ray_scaling, nan=0.0, posinf=1e6, neginf=0.0
+    )
 
 @jax.jit
 def scaling_calc_bound(s: State, bb_size: Array, lr: Array, A: Array, b: Array) -> Array:

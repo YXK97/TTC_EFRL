@@ -166,8 +166,89 @@ def test(args):
                 with open(csv_path, "w") as f:
                     f.write(",".join(["time_step"] + state_cols) + "\n")
                     for t in range(states.shape[0]):
-                        values = ",".join(f"{float(v):.6f}" for v in states[t, entity_id])
+                        # float32 needs roughly nine significant decimal digits
+                        # for a round trip.  Six decimal places can change which
+                        # polygon edge is active in safety diagnostics.
+                        values = ",".join(
+                            f"{float(v):.9e}" for v in states[t, entity_id]
+                        )
                         f.write(f"{t},{values}\n")
+                return csv_path
+
+            def save_safety_debug_csv(
+                agent_id,
+                raw_actions,
+                transformed_actions,
+                costs,
+                costs_real,
+                diagnostics,
+            ):
+                """Save action-dependent safety values without recomputation later."""
+                csv_path = os.path.join(
+                    state_dir,
+                    f"{stamp_str}_epi{i_epi:02d}_agent{agent_id:02d}_safety_debug.csv",
+                )
+                columns = ["time_step"]
+                columns += [f"raw_action{idx}" for idx in range(raw_actions.shape[-1])]
+                columns += [
+                    f"transformed_action{idx}"
+                    for idx in range(transformed_actions.shape[-1])
+                ]
+                columns += ["applied_steering"]
+                cost_names = [name.replace(" ", "_") for name in env.cost_components]
+                columns += [f"cost_{name}" for name in cost_names]
+                columns += [f"cost_real_{name}" for name in cost_names]
+                columns += [
+                    "boundary_alpha",
+                    "boundary_alpha_grad_x",
+                    "boundary_alpha_grad_y",
+                    "boundary_alpha_grad_heading_x",
+                    "boundary_alpha_grad_heading_y",
+                    "boundary_h_dot",
+                    "boundary_g_dot",
+                ]
+                for obstacle_id in range(diagnostics.obstacle_alpha.shape[2]):
+                    prefix = f"obstacle{obstacle_id:02d}"
+                    columns += [
+                        f"{prefix}_alpha",
+                        f"{prefix}_alpha_grad_x",
+                        f"{prefix}_alpha_grad_y",
+                        f"{prefix}_alpha_grad_heading_x",
+                        f"{prefix}_alpha_grad_heading_y",
+                        f"{prefix}_h_dot",
+                        f"{prefix}_g_dot",
+                    ]
+
+                with open(csv_path, "w") as f:
+                    f.write(",".join(columns) + "\n")
+                    for t in range(raw_actions.shape[0]):
+                        values = []
+                        values.extend(raw_actions[t, agent_id])
+                        values.extend(transformed_actions[t, agent_id])
+                        values.append(diagnostics.applied_steering[t, agent_id])
+                        values.extend(costs[t, agent_id])
+                        values.extend(costs_real[t, agent_id])
+                        values.append(diagnostics.boundary_alpha[t, agent_id])
+                        values.extend(diagnostics.boundary_alpha_grad[t, agent_id])
+                        values.append(diagnostics.boundary_h_dot[t, agent_id])
+                        values.append(diagnostics.boundary_g_dot[t, agent_id])
+                        for obstacle_id in range(diagnostics.obstacle_alpha.shape[2]):
+                            values.append(
+                                diagnostics.obstacle_alpha[t, agent_id, obstacle_id]
+                            )
+                            values.extend(
+                                diagnostics.obstacle_alpha_grad[
+                                    t, agent_id, obstacle_id
+                                ]
+                            )
+                            values.append(
+                                diagnostics.obstacle_h_dot[t, agent_id, obstacle_id]
+                            )
+                            values.append(
+                                diagnostics.obstacle_g_dot[t, agent_id, obstacle_id]
+                            )
+                        formatted = ",".join(f"{float(v):.9e}" for v in values)
+                        f.write(f"{t},{formatted}\n")
                 return csv_path
 
             csv_paths = []
@@ -177,6 +258,27 @@ def test(args):
                 csv_paths.append(save_entity_csv(goal_states, "goal", goal_id))
             for obst_id in range(obst_states.shape[1]):
                 csv_paths.append(save_entity_csv(obst_states, "obst", obst_id))
+
+            # The actor output stored in Rollout is normalized.  Environment
+            # costs use the transformed action and the rate-filtered steering,
+            # so save all three to make every frame reproducible.
+            raw_actions = jnp.asarray(rollout.actions)
+            transformed_actions = jax.vmap(env.transform_action)(raw_actions)
+            if hasattr(env, "get_safety_diagnostics"):
+                diagnostics = jax.jit(
+                    jax.vmap(env.get_safety_diagnostics)
+                )(T_graph, transformed_actions)
+                for agent_id in range(agent_states.shape[1]):
+                    csv_paths.append(
+                        save_safety_debug_csv(
+                            agent_id,
+                            raw_actions,
+                            transformed_actions,
+                            jnp.asarray(rollout.costs),
+                            jnp.asarray(rollout.costs_real),
+                            diagnostics,
+                        )
+                    )
             for csv_path in csv_paths:
                 print(f"csv保存位置: {csv_path}")
         

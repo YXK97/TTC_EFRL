@@ -16,7 +16,12 @@ from .mve import MVE
 from .utils import process_lane_marks
 from defmarl.trainer.data import Record, Rollout
 from defmarl.utils.graph import EdgeBlock, GetGraph, GraphsTuple
-from defmarl.utils.scaling_lowspeed import scaling_calc, scaling_calc_bound
+from defmarl.utils.scaling_lowspeed import (
+    scaling_calc,
+    scaling_calc_bound,
+    scaling_calc_parameterized,
+    scaling_calc_unbounded_bound,
+)
 from defmarl.utils.typing import Action, AgentState, Array, Cost, ObstState, Reward, State
 from defmarl.utils.utils import find_closest_goal_indices, gen_i_j_pairs, save_anim, tree_index
 
@@ -185,7 +190,15 @@ class LowSpeedAccelMixin(MVE):
             a_obst_cost_real = -jnp.ones((num_agents,), dtype=jnp.float32)
         else:
             i_pairs, j_pairs = gen_i_j_pairs(num_agents, num_obsts)
-            alpha_pairs = jax.vmap(scaling_calc, in_axes=(0, 0, None, None, None, None))(
+            obstacle_scaling_fn = (
+                scaling_calc_parameterized
+                if getattr(self, "USE_PARAMETERIZED_ISSF_OBSTACLE_SCALING", False)
+                else scaling_calc
+            )
+            alpha_pairs = jax.vmap(
+                obstacle_scaling_fn,
+                in_axes=(0, 0, None, None, None, None),
+            )(
                 agent_states[i_pairs],
                 graph.env_states.obstacle[j_pairs],
                 self.params["ego_bb_size"],
@@ -216,14 +229,23 @@ class LowSpeedAccelMixin(MVE):
         agent_states = graph.env_states.agent
         yl = self.params["default_state_range"][2]
         yh = self.params["default_state_range"][3]
-        alpha_low = jax.vmap(scaling_calc_bound, in_axes=(0, None, None, None, None))(
+        boundary_scaling_fn = (
+            scaling_calc_unbounded_bound
+            if getattr(self, "USE_UNBOUNDED_ISSF_ROAD_BOUNDS", False)
+            else scaling_calc_bound
+        )
+        alpha_low = jax.vmap(
+            boundary_scaling_fn, in_axes=(0, None, None, None, None)
+        )(
             agent_states,
             self.params["ego_bb_size"],
             self.params["ego_lr"],
             jnp.array([[0.0, 1.0]]),
             jnp.array([yl]),
         )
-        alpha_high = jax.vmap(scaling_calc_bound, in_axes=(0, None, None, None, None))(
+        alpha_high = jax.vmap(
+            boundary_scaling_fn, in_axes=(0, None, None, None, None)
+        )(
             agent_states,
             self.params["ego_bb_size"],
             self.params["ego_lr"],

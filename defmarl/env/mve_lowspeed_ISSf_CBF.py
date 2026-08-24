@@ -6,7 +6,11 @@ from typing_extensions import override
 
 from .mve_lowspeed_CBF import MVELaneChangeAndOverTake_LowSpeed_CBF
 from defmarl.utils.graph import GraphsTuple
-from defmarl.utils.scaling_lowspeed import scaling_calc
+from defmarl.utils.scaling_lowspeed import (
+    scaling_calc,
+    scaling_calc_parameterized,
+    scaling_calc_unbounded_bound,
+)
 from defmarl.utils.typing import Action, Cost, Reward
 from defmarl.utils.utils import gen_i_j_pairs
 
@@ -16,6 +20,9 @@ class MVELaneChangeAndOverTake_LowSpeed_ISSf_CBF(MVELaneChangeAndOverTake_LowSpe
 
     Longitudinal acceleration is intentionally excluded from the CBF condition.
     """
+
+    USE_UNBOUNDED_ISSF_ROAD_BOUNDS = False
+    USE_PARAMETERIZED_ISSF_OBSTACLE_SCALING = False
 
     PARAMS = MVELaneChangeAndOverTake_LowSpeed_CBF.PARAMS.copy()
     PARAMS.update({
@@ -32,6 +39,11 @@ class MVELaneChangeAndOverTake_LowSpeed_ISSf_CBF(MVELaneChangeAndOverTake_LowSpe
         num_agents = graph.env_states.agent.shape[0]
         num_obsts = graph.env_states.obstacle.shape[0]
         delta = self._filter_delta(graph.env_states.agent[:, 5], action[:, 1])
+        obstacle_scaling_fn = (
+            scaling_calc_parameterized
+            if self.USE_PARAMETERIZED_ISSF_OBSTACLE_SCALING
+            else scaling_calc
+        )
 
         def epsilon(h):
             epsilon_0 = self.params["issf_epsilon_0"]
@@ -39,18 +51,7 @@ class MVELaneChangeAndOverTake_LowSpeed_ISSf_CBF(MVELaneChangeAndOverTake_LowSpe
             epsilon_min = self.params["issf_epsilon_min"]
             return epsilon_min + epsilon_0 * jax.nn.softplus(epsilon_rate * h)
 
-        def issf_cbf_between(s1, s2, delta_rad, bb_size, lr):
-            def alpha_fn(z):
-                full = jnp.array([z[0], z[1], z[2], z[3], s1[4], s1[5]])
-                return scaling_calc(
-                    full,
-                    s2,
-                    self.params["ego_bb_size"],
-                    self.params["ego_lr"],
-                    bb_size,
-                    lr,
-                )
-
+        def issf_cbf_constraint(alpha_fn, s1, delta_rad):
             z = s1[:4]
             alpha, grad_z = jax.value_and_grad(alpha_fn)(z)
             alpha = jnp.nan_to_num(alpha, nan=0.0, posinf=1e6, neginf=0.0)
@@ -76,6 +77,20 @@ class MVELaneChangeAndOverTake_LowSpeed_ISSf_CBF(MVELaneChangeAndOverTake_LowSpe
             cost = jnp.nan_to_num(-residual, nan=10.0, posinf=10.0, neginf=-3.0)
             return cost, 1 - alpha
 
+        def issf_cbf_between(s1, s2, delta_rad, bb_size, lr):
+            def alpha_fn(z):
+                full = jnp.array([z[0], z[1], z[2], z[3], s1[4], s1[5]])
+                return obstacle_scaling_fn(
+                    full,
+                    s2,
+                    self.params["ego_bb_size"],
+                    self.params["ego_lr"],
+                    bb_size,
+                    lr,
+                )
+
+            return issf_cbf_constraint(alpha_fn, s1, delta_rad)
+
         a_agent_cost = -jnp.ones((num_agents,), dtype=jnp.float32) * 3.0
         a_agent_cost_real = -jnp.ones((num_agents,), dtype=jnp.float32) * 3.0
 
@@ -94,21 +109,54 @@ class MVELaneChangeAndOverTake_LowSpeed_ISSf_CBF(MVELaneChangeAndOverTake_LowSpe
             a_obst_cost = jnp.max(costs.reshape((num_agents, num_obsts)), axis=1)
             a_obst_cost_real = jnp.max(reals.reshape((num_agents, num_obsts)), axis=1)
 
-        bounds = self.generate_bound(graph.env_states.agent, self.params["bound_bb_size"])
-        a_low_cost, a_low_real = jax.vmap(issf_cbf_between, in_axes=(0, 0, 0, None, None))(
-            graph.env_states.agent,
-            bounds[::2],
-            delta,
-            self.params["bound_bb_size"],
-            0.0,
-        )
-        a_high_cost, a_high_real = jax.vmap(issf_cbf_between, in_axes=(0, 0, 0, None, None))(
-            graph.env_states.agent,
-            bounds[1::2],
-            delta,
-            self.params["bound_bb_size"],
-            0.0,
-        )
+        if self.USE_UNBOUNDED_ISSF_ROAD_BOUNDS:
+            def issf_cbf_bound(s1, delta_rad, A, b):
+                def alpha_fn(z):
+                    full = jnp.array([z[0], z[1], z[2], z[3], s1[4], s1[5]])
+                    return scaling_calc_unbounded_bound(
+                        full,
+                        self.params["ego_bb_size"],
+                        self.params["ego_lr"],
+                        A,
+                        b,
+                    )
+
+                return issf_cbf_constraint(alpha_fn, s1, delta_rad)
+
+            y_low = self.params["default_state_range"][2]
+            y_high = self.params["default_state_range"][3]
+            lower_A = jnp.array([[0.0, 1.0]])
+            lower_b = jnp.array([y_low])
+            upper_A = jnp.array([[0.0, -1.0]])
+            upper_b = jnp.array([-y_high])
+            a_low_cost, a_low_real = jax.vmap(
+                issf_cbf_bound, in_axes=(0, 0, None, None)
+            )(graph.env_states.agent, delta, lower_A, lower_b)
+            a_high_cost, a_high_real = jax.vmap(
+                issf_cbf_bound, in_axes=(0, 0, None, None)
+            )(graph.env_states.agent, delta, upper_A, upper_b)
+        else:
+            bounds = self.generate_bound(
+                graph.env_states.agent, self.params["bound_bb_size"]
+            )
+            a_low_cost, a_low_real = jax.vmap(
+                issf_cbf_between, in_axes=(0, 0, 0, None, None)
+            )(
+                graph.env_states.agent,
+                bounds[::2],
+                delta,
+                self.params["bound_bb_size"],
+                0.0,
+            )
+            a_high_cost, a_high_real = jax.vmap(
+                issf_cbf_between, in_axes=(0, 0, 0, None, None)
+            )(
+                graph.env_states.agent,
+                bounds[1::2],
+                delta,
+                self.params["bound_bb_size"],
+                0.0,
+            )
 
         cost = jnp.stack([a_agent_cost, a_obst_cost, a_low_cost, a_high_cost], axis=1)
         cost_real = jnp.stack([a_agent_cost_real, a_obst_cost_real, a_low_real, a_high_real], axis=1)

@@ -34,9 +34,10 @@ from .mve_lowspeed_CBF_dynamic import MVELaneChangeAndOverTake_LowSpeed_CBF_Dyna
 from defmarl.utils.graph import GraphsTuple
 from defmarl.trainer.data import Rollout
 from defmarl.utils.scaling_lowspeed import (
-    compute_intersections,
+    EPS,
     heading_rot_matrix,
     rear_to_center,
+    safe_divide,
     safe_norm,
     scaling_calc,
 )
@@ -62,6 +63,26 @@ class MVEIntersectionLowSpeedDynamicState(NamedTuple):
     @property
     def n_agent(self) -> int:
         return self.agent.shape[0]
+
+
+class IntersectionSafetyDiagnostics(NamedTuple):
+    """Per-frame values needed to reproduce intersection safety constraints.
+
+    Obstacle fields retain a separate axis for every obstacle.  This is more
+    useful than exporting only the maximum obstacle constraint because it shows
+    which obstacle selected the maximum and whether that selection changed.
+    Gradients are with respect to ``[x, y, heading_x, heading_y]``.
+    """
+
+    applied_steering: Array
+    obstacle_alpha: Array
+    obstacle_alpha_grad: Array
+    obstacle_h_dot: Array
+    obstacle_g_dot: Array
+    boundary_alpha: Array
+    boundary_alpha_grad: Array
+    boundary_h_dot: Array
+    boundary_g_dot: Array
 
 
 @jax.jit
@@ -108,10 +129,95 @@ def intersection_corner_halfspaces(
 
 
 @jax.jit
+def intersection_corner_extreme_points(
+    main_half_width: Array,
+    auxiliary_half_width: Array,
+    turn_half: Array,
+) -> Array:
+    """Return the two finite extreme points of every unbounded road corner.
+
+    The order follows ``intersection_corner_halfspaces``: southwest,
+    southeast, northeast, northwest.  Infinite rays of an unbounded polygon
+    are not extreme points and therefore do not appear in this array.
+    """
+
+    return jnp.array(
+        [
+            [[-turn_half, -main_half_width], [-auxiliary_half_width, -turn_half]],
+            [[turn_half, -main_half_width], [auxiliary_half_width, -turn_half]],
+            [[turn_half, main_half_width], [auxiliary_half_width, turn_half]],
+            [[-turn_half, main_half_width], [-auxiliary_half_width, turn_half]],
+        ],
+        dtype=jnp.float32,
+    )
+
+
+@jax.jit
+def compute_intersections_explicit(
+    origin: Array,
+    target: Array,
+    A: Array,
+    b: Array,
+    fill: Array,
+) -> Array:
+    """Compute explicit ray/edge intersections with stable line scaling.
+
+    The generic historical implementation normalizes ``[a, b, c]`` together.
+    Since ``c`` depends on the world-coordinate origin, that makes the
+    determinant used for parallel detection depend on absolute position.  A
+    geometrically identical translated scene can consequently select a
+    different branch.  Here only the line normal is normalized; the method
+    still constructs and filters explicit intersections as in the original
+    ray-casting implementation.
+    """
+
+    direction = target - origin
+    direction_norm = jnp.maximum(jnp.linalg.norm(direction), EPS)
+    line_a = direction[1] / direction_norm
+    line_b = -direction[0] / direction_norm
+    line_c = -(line_a * origin[0] + line_b * origin[1])
+
+    edge_normal_norm = jnp.maximum(jnp.linalg.norm(A, axis=1), EPS)
+    edge_a = A[:, 0] / edge_normal_norm
+    edge_b = A[:, 1] / edge_normal_norm
+    edge_c = -b / edge_normal_norm
+    determinant = line_a * edge_b - edge_a * line_b
+    x_numerator = line_b * edge_c - edge_b * line_c
+    y_numerator = edge_a * line_c - line_a * edge_c
+    x_raw = safe_divide(x_numerator, determinant)
+    y_raw = safe_divide(y_numerator, determinant)
+    intersects = jnp.abs(determinant) > EPS
+    candidates = jnp.stack(
+        [
+            jnp.where(intersects, x_raw, fill[0]),
+            jnp.where(intersects, y_raw, fill[1]),
+        ],
+        axis=1,
+    )
+    ray_parameter_numerator = jnp.sum(
+        (candidates - origin) * direction, axis=1
+    )
+    ray_parameter_denominator = jnp.maximum(jnp.dot(direction, direction), EPS)
+    same_direction = (
+        ray_parameter_numerator / ray_parameter_denominator >= -1e-6
+    )
+    candidates = jnp.where(same_direction[:, None], candidates, fill)
+
+    # Test halfspace membership in geometric distance units.  A fixed residual
+    # tolerance is unreliable because the diagonal road edge has much larger
+    # coefficients than the horizontal and vertical edges.
+    normal_norms = jnp.maximum(jnp.linalg.norm(A, axis=1), EPS)
+    normalized_residual = (A @ candidates.T - b[:, None]) / normal_norms[:, None]
+    in_polygon = jnp.max(normalized_residual, axis=0) <= 1e-5
+    return jnp.where(in_polygon[:, None], candidates, fill)
+
+
+@jax.jit
 def scaling_calc_lowspeed_convex_bound(
     state: State,
     A: Array,
     b: Array,
+    extreme_points: Array,
     bb_size: Array,
     rear_to_center_offset: Array,
 ) -> Array:
@@ -135,11 +241,34 @@ def scaling_calc_lowspeed_convex_bound(
     vertices = center + local_vertices @ rotation.T
 
     intersections = jax.vmap(
-        compute_intersections, in_axes=(None, 0, None, None, None)
+        compute_intersections_explicit, in_axes=(None, 0, None, None, None)
     )(center, vertices, A, b, center + 1e8)
     intersection_distances = safe_norm(intersections - center, axis=-1)
     vertex_distances = safe_norm(vertices - center, axis=-1)[:, None]
-    scaling = jnp.min(intersection_distances / vertex_distances)
+    vertex_ray_scaling = jnp.min(intersection_distances / vertex_distances)
+
+    # Complete the second ray group from the paper: cast rays from the ego
+    # scaling origin towards every finite extreme point of the unbounded road
+    # corner, then intersect those rays with the four ego edges.
+    rectangle_template = jnp.array(
+        [[1.0, 0.0], [-1.0, 0.0], [0.0, 1.0], [0.0, -1.0]]
+    )
+    ego_A = rectangle_template @ rotation.T
+    ego_b_local = jnp.array(
+        [bb_size[0] / 2.0, bb_size[0] / 2.0, bb_size[1] / 2.0, bb_size[1] / 2.0]
+    )
+    ego_b = ego_b_local + ego_A @ center
+    extreme_intersections = jax.vmap(
+        compute_intersections_explicit, in_axes=(None, 0, None, None, None)
+    )(center, extreme_points, ego_A, ego_b, center + 1e-8)
+    extreme_distances = safe_norm(extreme_points - center, axis=-1)[:, None]
+    ego_intersection_distances = safe_norm(
+        extreme_intersections - center, axis=-1
+    )
+    extreme_ray_scaling = jnp.min(
+        extreme_distances / ego_intersection_distances
+    )
+    scaling = jnp.minimum(vertex_ray_scaling, extreme_ray_scaling)
 
     # When the scaling center is already inside the forbidden polygon, alpha
     # must collapse towards zero rather than reporting the next outward edge.
@@ -161,10 +290,20 @@ def scaling_calc_intersection_bounds_lowspeed(
     all_A, all_b = intersection_corner_halfspaces(
         main_half_width, auxiliary_half_width, turn_half
     )
+    all_extreme_points = intersection_corner_extreme_points(
+        main_half_width, auxiliary_half_width, turn_half
+    )
     alphas = jax.vmap(
         scaling_calc_lowspeed_convex_bound,
-        in_axes=(None, 0, 0, None, None),
-    )(state, all_A, all_b, bb_size, rear_to_center_offset)
+        in_axes=(None, 0, 0, 0, None, None),
+    )(
+        state,
+        all_A,
+        all_b,
+        all_extreme_points,
+        bb_size,
+        rear_to_center_offset,
+    )
     return jnp.min(alphas)
 
 
@@ -457,6 +596,113 @@ class MVEIntersection_LowSpeed_ISSf_CBF_Dynamic(
         residual = h_dot / gamma + h - young_penalty / gamma
         cost = jnp.nan_to_num(-residual, nan=10.0, posinf=10.0, neginf=-3.0)
         return cost, 1.0 - alpha
+
+    def _safety_diagnostic_terms(
+        self, alpha_fn, state: State, steering: Array
+    ) -> Tuple[Array, Array, Array, Array]:
+        """Return the geometric and differential terms used by ISSf-CBF.
+
+        This intentionally mirrors ``_issf_constraint`` instead of changing
+        that training path.  Keeping the diagnostic path separate ensures CSV
+        instrumentation cannot alter the learned constraint computation.
+        """
+
+        def alpha_from_pose(pose):
+            full_state = jnp.array(
+                [pose[0], pose[1], pose[2], pose[3], state[4], state[5]]
+            )
+            return alpha_fn(full_state)
+
+        pose = state[:4]
+        alpha, alpha_grad = jax.value_and_grad(alpha_from_pose)(pose)
+        alpha = jnp.nan_to_num(alpha, nan=0.0, posinf=1e6, neginf=0.0)
+        alpha_grad = jnp.nan_to_num(
+            alpha_grad, nan=0.0, posinf=0.0, neginf=0.0
+        )
+        heading = pose[2:4] / jnp.maximum(jnp.linalg.norm(pose[2:4]), 1e-6)
+        angular_speed = state[4] / self.params["ego_L"] * jnp.tan(steering)
+        pose_dot = jnp.array(
+            [
+                state[4] * heading[0],
+                state[4] * heading[1],
+                -heading[1] * angular_speed,
+                heading[0] * angular_speed,
+            ]
+        )
+        steering_channel = jnp.array(
+            [
+                0.0,
+                0.0,
+                -heading[1] * state[4] / self.params["ego_L"],
+                heading[0] * state[4] / self.params["ego_L"],
+            ]
+        )
+        h_dot = jnp.dot(alpha_grad, pose_dot)
+        g_dot = jnp.dot(alpha_grad, steering_channel)
+        return alpha, alpha_grad, h_dot, g_dot
+
+    def get_safety_diagnostics(
+        self, graph: GraphsTuple, transformed_action: Action
+    ) -> IntersectionSafetyDiagnostics:
+        """Compute exact per-constraint diagnostics for CSV inspection.
+
+        ``transformed_action`` must already be converted from the actor's
+        normalized ``[-1, 1]`` output to the environment's physical units.
+        ``test.py`` exports both versions and passes the physical one here.
+        """
+
+        agents = graph.env_states.agent
+        obstacles = graph.env_states.obstacle
+        num_agents = agents.shape[0]
+        num_obstacles = obstacles.shape[0]
+        steering = self._filter_delta(agents[:, 5], transformed_action[:, 1])
+
+        i_pairs, j_pairs = gen_i_j_pairs(num_agents, num_obstacles)
+
+        def obstacle_terms(state, obstacle, steering_value):
+            def obstacle_alpha(ego_state):
+                return scaling_calc(
+                    ego_state,
+                    obstacle,
+                    self.params["ego_bb_size"],
+                    self.params["ego_lr"],
+                    self.params["obst_bb_size"],
+                    self.params["obst_lr"],
+                )
+
+            return self._safety_diagnostic_terms(
+                obstacle_alpha, state, steering_value
+            )
+
+        obstacle_alpha, obstacle_grad, obstacle_h_dot, obstacle_g_dot = jax.vmap(
+            obstacle_terms
+        )(
+            agents[i_pairs],
+            obstacles[j_pairs],
+            steering[i_pairs],
+        )
+        obstacle_alpha = obstacle_alpha.reshape((num_agents, num_obstacles))
+        obstacle_grad = obstacle_grad.reshape((num_agents, num_obstacles, 4))
+        obstacle_h_dot = obstacle_h_dot.reshape((num_agents, num_obstacles))
+        obstacle_g_dot = obstacle_g_dot.reshape((num_agents, num_obstacles))
+
+        boundary_alpha, boundary_grad, boundary_h_dot, boundary_g_dot = jax.vmap(
+            lambda state, steering_value: self._safety_diagnostic_terms(
+                self._intersection_alpha, state, steering_value
+            )
+        )(agents, steering)
+
+        return IntersectionSafetyDiagnostics(
+            steering,
+            obstacle_alpha,
+            obstacle_grad,
+            obstacle_h_dot,
+            obstacle_g_dot,
+            boundary_alpha,
+            boundary_grad,
+            boundary_h_dot,
+            boundary_g_dot,
+        )
 
     @override
     def get_cost(self, graph: GraphsTuple, action: Action) -> Tuple[Cost, Cost]:

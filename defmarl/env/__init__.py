@@ -22,6 +22,12 @@ from defmarl.env.mve_intersection_lowspeed_ISSf_CBF_dynamic import (
 from defmarl.env.mve_intersection_lowspeed_ISSf_CBF_dynamic_WestEnter import (
     MVEIntersection_LowSpeed_ISSf_CBF_Dynamic_WestEnter,
 )
+from defmarl.env.mve_intersection_lowspeed_ISSf_CBF_dynamic_new_scaling import (
+    MVEIntersection_LowSpeed_ISSf_CBF_Dynamic_NewScaling,
+)
+from defmarl.env.mve_intersection_lowspeed_ISSf_CBF_dynamic_WestEnter_new_scaling import (
+    MVEIntersection_LowSpeed_ISSf_CBF_Dynamic_WestEnter_NewScaling,
+)
 
 ENV = {
     'MVELaneChange': MVELaneChangeAndOverTake,
@@ -41,6 +47,8 @@ ENV = {
     'MVEIntersection': MVEIntersection,
     'MVEIntersection_LowSpeed_ISSf_CBF_Dynamic': MVEIntersection_LowSpeed_ISSf_CBF_Dynamic,
     'MVEIntersection_LowSpeed_ISSf_CBF_Dynamic_WestEnter': MVEIntersection_LowSpeed_ISSf_CBF_Dynamic_WestEnter,
+    'MVEIntersection_LowSpeed_ISSf_CBF_Dynamic_NewScaling': MVEIntersection_LowSpeed_ISSf_CBF_Dynamic_NewScaling,
+    'MVEIntersection_LowSpeed_ISSf_CBF_Dynamic_WestEnter_NewScaling': MVEIntersection_LowSpeed_ISSf_CBF_Dynamic_WestEnter_NewScaling,
 }
 
 
