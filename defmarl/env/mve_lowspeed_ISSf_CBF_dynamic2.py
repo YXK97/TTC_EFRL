@@ -7,8 +7,10 @@ from typing_extensions import override
 from .mve_lowspeed_CBF_dynamic import MVELaneChangeAndOverTake_LowSpeed_CBF_Dynamic
 from .mve_lowspeed_ISSf_CBF import MVELaneChangeAndOverTake_LowSpeed_ISSf_CBF
 from .mve_lowspeed_ISSf_CBF_dynamic import (
-    MVELaneChangeAndOverTake_LowSpeed_ISSf_CBF_Dynamic,
+    _get_safe_compressed_cost,
+    _safe_compressed_diagnostic_terms,
 )
+from .mve_lowspeed_ISSf_CBF import LowSpeedSafetyDiagnostics
 from defmarl.utils.graph import GraphsTuple
 from defmarl.utils.typing import Action, Cost, Reward
 
@@ -16,19 +18,22 @@ from defmarl.utils.typing import Action, Cost, Reward
 class MVELaneChangeAndOverTake_LowSpeed_ISSf_CBF_Dynamic2(MVELaneChangeAndOverTake_LowSpeed_CBF_Dynamic):
     """Dynamic-obstacle low-speed environment with ego-only ISSf-CBF costs."""
 
-    # Keep the gamma=5 variant geometrically identical to the gamma=100
-    # variant: both use direct unbounded road half-planes for ISSf-CBF bounds.
+    # Keep the gamma=5 variant geometrically identical to Dynamic1: both use
+    # parameterized obstacle rays and direct unbounded road half-planes.
     USE_UNBOUNDED_ISSF_ROAD_BOUNDS = True
     USE_PARAMETERIZED_ISSF_OBSTACLE_SCALING = True
 
     PARAMS = MVELaneChangeAndOverTake_LowSpeed_CBF_Dynamic.PARAMS.copy()
     PARAMS.update({
         "obst_bb_size": jnp.array([4, 2]),
-        "gamma": 5.0,
+        "v_min": 1.0 / 3.6,
+        "v_max": 30.0 / 3.6,
+        "gamma": 3.0,
         "issf_epsilon_0": 1.0,
         "issf_epsilon_rate": 1.0,
-        "issf_epsilon_min": 10.0,
-        "pre_static_penalty": 0.05,
+        "issf_epsilon_min": 30.0,
+        "issf_safe_barrier_kappa": 0.5,
+        "pre_static_penalty": 0.2,
     })
 
     _SCENE_PHASE_NAMES = (
@@ -49,14 +54,26 @@ class MVELaneChangeAndOverTake_LowSpeed_ISSf_CBF_Dynamic2(MVELaneChangeAndOverTa
 
     @override
     def get_cost(self, graph: GraphsTuple, action: Action) -> Tuple[Cost, Cost]:
-        return MVELaneChangeAndOverTake_LowSpeed_ISSf_CBF.get_cost(self, graph, action)
+        return _get_safe_compressed_cost(self, graph, action)
+
+    def _safety_diagnostic_terms(self, alpha_fn, state, steering):
+        return _safe_compressed_diagnostic_terms(
+            self, alpha_fn, state, steering
+        )
+
+    def get_safety_diagnostics(
+        self, graph: GraphsTuple, transformed_action: Action
+    ) -> LowSpeedSafetyDiagnostics:
+        return MVELaneChangeAndOverTake_LowSpeed_ISSf_CBF.get_safety_diagnostics(
+            self, graph, transformed_action
+        )
 
     @override
     def get_reward(self, graph: GraphsTuple, action: Action) -> Reward:
         agent = self._observable(graph.env_states.agent)
         goal = self._observable(graph.env_states.goal)
         e = agent - goal
-        W = jnp.diag(jnp.array([2.5e-4, 2.5e-4, 0, 0, 1e-4, 0]))
+        W = jnp.diag(jnp.array([2.5e-4, 2.5e-4, 0, 0, 5e-4, 0]))
         reward = -jnp.sqrt(jnp.einsum("ai,ij,ja->a", e, W, e.transpose())).mean()
         # reward -= (action[:, 0] ** 2).mean() * 0.0001
         # reward -= (action[:, 1] ** 2).mean() * 0.0001

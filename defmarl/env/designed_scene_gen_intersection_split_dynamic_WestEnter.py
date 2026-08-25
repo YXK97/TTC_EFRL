@@ -1,27 +1,350 @@
-"""West-entry variant of the low-speed split intersection scene generator.
+"""West-entry curriculum for the low-speed split intersection.
 
-Only ego's entrance road and maneuver probabilities are constrained here.
-Phase selection, lane selection, reference generation, static-obstacle
-placement, dynamic-obstacle relation and motion parameters all remain
-implemented by ``designed_scene_gen_intersection_split_dynamic``.
+The shared intersection generator still owns all road and reference geometry.
+This module only specializes the WestEnter curriculum: route probabilities,
+early-path initialization, and dynamic-obstacle arrival timing.
 """
 
 from typing import Optional, Tuple
 
+import jax
+import jax.numpy as jnp
+import jax.random as jr
+
 from defmarl.utils.typing import AgentState, Array, ObstState, PathRefs, PRNGKey
 
-from .designed_scene_gen_intersection_split_dynamic import (
-    IntersectionSplitDynamicScene,
-)
+from . import designed_scene_gen_intersection_split_dynamic as _base
 
+
+# Geometry contract: path samples and vehicle x/y states denote rear-axle
+# centers.  The environment's scaling functions apply ego_lr/obst_lr when
+# constructing geometric centers and bounding-box vertices.  Applying those
+# offsets here as well would shift every collision shape twice.
 
 # Road indices follow the shared generator convention:
 # 0 south, 1 east, 2 north, 3 west.
 WEST_ROAD_IDX = 3
-WEST_MANEUVER_PROBS = (1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0)
+WEST_MANEUVER_PROBS = jnp.array([1.0 / 3.0] * 3, dtype=jnp.float32)
+EGO_MIN_SPEED = 1.0 / 3.6
+EGO_MAX_SPEED = 30.0 / 3.6
+EGO_REFERENCE_SPEED_RANGE_KMH = (10.0, 30.0)
+
+# PASSED and DONE do not help the early avoidance curriculum.  Renormalizing
+# the former START/APPROACH/SIDE weights (0.20/0.35/0.20) preserves their
+# relative frequency while assigning exactly zero mass to the last two phases.
+WEST_PHASE_PROBS = jnp.array(
+    [0.2, 0.5, 0.3, 0.0, 0.0], dtype=jnp.float32
+)
 
 
-class IntersectionSplitDynamicWestEnterScene(IntersectionSplitDynamicScene):
+def _early_path_limit(maneuver: Array, path_total: Array) -> Array:
+    """End of the entrance plus the first third of the central path segment."""
+    approach_len = _base.ROAD_HALF - _base.TURN_HALF
+    turn_curve_len = path_total - 2.0 * approach_len
+    # A straight route crosses a 2*TURN_HALF-long central region.  Treating
+    # that interval like a turn makes all three maneuvers use the same rule.
+    central_segment_len = jnp.where(
+        maneuver == _base.MANEUVER_STRAIGHT,
+        2.0 * _base.TURN_HALF,
+        turn_curve_len,
+    )
+    return approach_len + central_segment_len / 3.0
+
+
+def _sample_west_path_positions(
+    key: PRNGKey,
+    phase: Array,
+    maneuver: Array,
+    path_total: Array,
+) -> Tuple[Array, Array]:
+    """Sample ego/static progress inside the early WestEnter curriculum.
+
+    Random training only selects the first three branches.  PASSED and DONE
+    remain implemented so callers can still force those phases for debugging.
+    """
+    static_key, gap_key = jr.split(key)
+    early_limit = _early_path_limit(maneuver, path_total)
+
+    def start_phase(_):
+        # START covers most of the western entrance and the first third of the
+        # central path.  Its larger gap initializes ego relatively early while
+        # retaining enough longitudinal clearance from the static vehicle.
+        static_s = jr.uniform(static_key, (), minval=15.0, maxval=early_limit)
+        max_gap = jnp.minimum(24.0, static_s)
+        gap = jr.uniform(
+            gap_key, (), minval=12.0, maxval=max_gap
+        )
+        return static_s, static_s - gap
+
+    def approach_phase(_):
+        # APPROACH begins closer to the static vehicle than START.  Sampling
+        # static_s from 10 m also adds cases where both vehicles are still well
+        # inside the straight entrance section.
+        static_s = jr.uniform(static_key, (), minval=10.0, maxval=early_limit)
+        max_gap = jnp.minimum(18.0, static_s)
+        gap = jr.uniform(gap_key, (), minval=8.0, maxval=max_gap)
+        return static_s, static_s - gap
+
+    def side_phase(_):
+        # SIDE represents an in-progress bypass in the adjacent lane.  Ego is
+        # never initialized beyond the static vehicle in path progress.
+        static_s = jr.uniform(static_key, (), minval=8.0, maxval=early_limit)
+        relative_s = jr.uniform(gap_key, (), minval=-8.0, maxval=0.0)
+        return static_s, static_s + relative_s
+
+    def passed_phase(_):
+        static_s = jr.uniform(
+            static_key, (), minval=2.0, maxval=path_total - 18.0
+        )
+        gap = jr.uniform(gap_key, (), minval=8.0, maxval=18.0)
+        return static_s, static_s + gap
+
+    def done_phase(_):
+        static_s = jr.uniform(
+            static_key, (), minval=2.0, maxval=path_total - 32.0
+        )
+        gap = jr.uniform(gap_key, (), minval=18.0, maxval=32.0)
+        return static_s, static_s + gap
+
+    return jax.lax.switch(
+        phase,
+        [start_phase, approach_phase, side_phase, passed_phase, done_phase],
+        operand=None,
+    )
+
+
+def _distance_under_speed_controller(
+    initial_speed: Array,
+    target_speed: Array,
+    accel_magnitude: Array,
+    duration: Array,
+) -> Array:
+    """Integrate the obstacle's constant-acceleration speed controller."""
+    speed_delta = target_speed - initial_speed
+    accel_time = jnp.abs(speed_delta) / jnp.maximum(accel_magnitude, 1e-6)
+    active_time = jnp.minimum(duration, accel_time)
+    signed_accel = jnp.sign(speed_delta) * accel_magnitude
+    active_distance = (
+        initial_speed * active_time
+        + 0.5 * signed_accel * active_time**2
+    )
+    return active_distance + target_speed * (duration - active_time)
+
+
+def _make_timed_dynamic_obstacle(
+    key: PRNGKey,
+    phase: Array,
+    relation: Array,
+    start_road_idx: Array,
+    agents: AgentState,
+    static_obstacle: ObstState,
+    ego_arrival_time: Array,
+) -> Tuple[ObstState, Array, Array]:
+    """Time dynamic traffic to reach the intersection center with ego."""
+    (
+        perpendicular_key,
+        lane_key,
+        initial_speed_key,
+        target_speed_key,
+        accel_key,
+    ) = jr.split(key, 5)
+    perpendicular_side = jr.choice(
+        perpendicular_key, jnp.array([-1, 1], dtype=jnp.int32)
+    )
+    obstacle_road = jnp.where(
+        relation == _base.DYNAMIC_SAME_DIRECTION,
+        start_road_idx,
+        jnp.where(
+            relation == _base.DYNAMIC_OPPOSITE_DIRECTION,
+            (start_road_idx + 2) % 4,
+            (start_road_idx + perpendicular_side) % 4,
+        ),
+    )
+    obstacle_direction = _base.ROAD_DIRS[obstacle_road]
+    obstacle_lane_idx = jr.randint(lane_key, (), minval=0, maxval=2)
+    obstacle_lane_offset = _base._lane_centers(obstacle_road)[obstacle_lane_idx]
+
+    random_initial_speed = jr.uniform(
+        initial_speed_key,
+        (),
+        minval=_base.DYNAMIC_INITIAL_SPEED_RANGE_KMH[0] / 3.6,
+        maxval=_base.DYNAMIC_INITIAL_SPEED_RANGE_KMH[1] / 3.6,
+    )
+    initial_speed = jnp.where(phase == _base.PHASE_START, 0.0, random_initial_speed)
+    target_speed = jr.uniform(
+        target_speed_key,
+        (),
+        minval=_base.DYNAMIC_TARGET_SPEED_RANGE_KMH[0] / 3.6,
+        maxval=_base.DYNAMIC_TARGET_SPEED_RANGE_KMH[1] / 3.6,
+    )
+    target_speed = jnp.where(
+        phase == _base.PHASE_START,
+        jnp.maximum(target_speed, 10.0 / 3.6),
+        target_speed,
+    )
+    accel_magnitude = jr.uniform(
+        accel_key,
+        (),
+        minval=_base.DYNAMIC_ACCEL_MAGNITUDE_RANGE[0],
+        maxval=_base.DYNAMIC_ACCEL_MAGNITUDE_RANGE[1],
+    )
+
+    travel_distance = _distance_under_speed_controller(
+        initial_speed, target_speed, accel_magnitude, ego_arrival_time
+    )
+    # Roads are unbounded beyond the nominal +/-50 m initialization window.
+    # Do not clip here: a fast obstacle paired with a distant START ego may
+    # need to begin outside that window to arrive at the center at the same
+    # time.  Clipping would make it cross the conflict point much too early.
+    nominal_longitudinal = -travel_distance
+
+    # The nominal candidate gives the requested center-arrival time.  Offset
+    # candidates are only fallbacks for an unsafe initial coincidence with
+    # ego/static.  They are ordered by timing error, so the smallest safe shift
+    # is always selected.
+    candidate_longitudinals = nominal_longitudinal + jnp.array(
+        [0.0, -6.0, 6.0, -12.0, 12.0], dtype=jnp.float32
+    )
+    candidate_xys = jax.vmap(
+        lambda longitudinal: _base._road_point(
+            obstacle_road, longitudinal, obstacle_lane_offset
+        )
+    )(candidate_longitudinals)
+    agent_clearance = jnp.min(
+        jnp.linalg.norm(candidate_xys[:, None, :] - agents[None, :, :2], axis=2),
+        axis=1,
+    )
+    static_clearance = jnp.linalg.norm(
+        candidate_xys - static_obstacle[None, :2], axis=1
+    )
+    clearance = jnp.minimum(agent_clearance, static_clearance)
+    valid = clearance >= 6.0
+    # Prefer nominal, then +/-6 m, then +/-12 m whenever one is safe.
+    valid_priority = jnp.array([5.0, 4.0, 3.0, 2.0, 1.0], dtype=jnp.float32)
+    selected_idx = jnp.where(
+        jnp.any(valid),
+        jnp.argmax(jnp.where(valid, valid_priority, -1.0)),
+        jnp.argmax(clearance),
+    )
+    state = _base._make_state(
+        candidate_xys[selected_idx], obstacle_direction, initial_speed
+    )
+    return state, accel_magnitude, target_speed
+
+
+def _make_west_scene(
+    key: PRNGKey,
+    num_agents: int,
+    num_ref_points: int,
+    maneuver: Array,
+    relation: Array,
+    phase: Array,
+) -> Tuple[AgentState, ObstState, PathRefs, Array, Array, Array, Array]:
+    """Build one WestEnter scene without changing the shared generator."""
+    (
+        lane_key,
+        speed_key,
+        progress_key,
+        agent_key,
+        ego_speed_key,
+        dynamic_key,
+    ) = jr.split(key, 6)
+    start_road_idx = jnp.asarray(WEST_ROAD_IDX, dtype=jnp.int32)
+    lane_idx = jr.randint(lane_key, (), minval=0, maxval=2)
+    reference_speed = jr.uniform(
+        speed_key,
+        (),
+        minval=EGO_REFERENCE_SPEED_RANGE_KMH[0] / 3.6,
+        maxval=EGO_REFERENCE_SPEED_RANGE_KMH[1] / 3.6,
+    )
+    _, _, _, path_total = _base._path_geometry(
+        jnp.array(0.0, dtype=jnp.float32), start_road_idx, maneuver, lane_idx
+    )
+    static_s, ego_s = _sample_west_path_positions(
+        progress_key, phase, maneuver, path_total
+    )
+    agents = _base._make_agents(
+        agent_key,
+        phase,
+        num_agents,
+        ego_s,
+        start_road_idx,
+        maneuver,
+        lane_idx,
+    )
+    # The shared generator still permits ego speeds up to 40 km/h.  Resample
+    # only the WestEnter ego speed here so the shared intersection curriculum
+    # remains untouched.  START uses the nonzero kinematic lower limit.
+    random_ego_speeds = jr.uniform(
+        ego_speed_key,
+        (num_agents,),
+        minval=EGO_MIN_SPEED,
+        maxval=EGO_MAX_SPEED,
+    )
+    ego_speeds = jnp.where(
+        phase == _base.PHASE_START,
+        jnp.full((num_agents,), EGO_MIN_SPEED, dtype=jnp.float32),
+        random_ego_speeds,
+    )
+    agents = agents.at[:, 4].set(ego_speeds)
+    goals, derivatives, _ = _base._generate_reference(
+        num_agents,
+        num_ref_points,
+        start_road_idx,
+        maneuver,
+        lane_idx,
+        reference_speed,
+        ego_s,
+    )
+    static_obstacle = _base._make_static_obstacle(
+        static_s, start_road_idx, maneuver, lane_idx
+    )
+
+    approach_len = _base.ROAD_HALF - _base.TURN_HALF
+    curve_len = path_total - 2.0 * approach_len
+    conflict_s = jnp.where(
+        maneuver == _base.MANEUVER_STRAIGHT,
+        _base.ROAD_HALF,
+        approach_len + 0.5 * curve_len,
+    )
+    # Ego generally accelerates toward its reference speed.  Using 85% of that
+    # speed predicts center arrival more faithfully than averaging with the
+    # deliberately tiny START speed.
+    estimated_ego_speed = jnp.maximum(
+        jnp.maximum(jnp.mean(agents[:, 4]), 0.85 * reference_speed), 2.0
+    )
+    ego_arrival_time = jnp.clip(
+        (conflict_s - ego_s) / estimated_ego_speed, 1.0, 12.0
+    )
+    dynamic_obstacle, dynamic_accel, dynamic_target_speed = (
+        _make_timed_dynamic_obstacle(
+            dynamic_key,
+            phase,
+            relation,
+            start_road_idx,
+            agents,
+            static_obstacle,
+            ego_arrival_time,
+        )
+    )
+    obstacles = jnp.stack([static_obstacle, dynamic_obstacle], axis=0)
+    scene_id = (
+        (start_road_idx * _base.NUM_MANEUVERS + maneuver)
+        * _base.NUM_DYNAMIC_RELATIONS
+        + relation
+    ) * _base.NUM_PHASES + phase
+    return (
+        agents,
+        obstacles,
+        goals,
+        derivatives,
+        dynamic_accel,
+        dynamic_target_speed,
+        scene_id,
+    )
+
+
+class IntersectionSplitDynamicWestEnterScene(_base.IntersectionSplitDynamicScene):
     """Split intersection scene whose ego route always enters from the west."""
 
     def __init__(
@@ -49,7 +372,57 @@ class IntersectionSplitDynamicWestEnterScene(IntersectionSplitDynamicScene):
             dynamic_relation=dynamic_relation,
             phase=phase,
             fixed_start_road_idx=WEST_ROAD_IDX,
-            maneuver_probs=WEST_MANEUVER_PROBS,
+            maneuver_probs=(1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0),
+        )
+
+    def make_with_id(
+        self,
+    ) -> Tuple[AgentState, ObstState, PathRefs, Array, Array, Array, Array]:
+        """Build a WestEnter scene using the dedicated early curriculum."""
+        choose_key, scene_key = jr.split(self.key)
+        phase_key, maneuver_key, relation_key = jr.split(choose_key, 3)
+        sampled_phase = jr.choice(
+            phase_key,
+            jnp.arange(_base.NUM_PHASES, dtype=jnp.int32),
+            p=WEST_PHASE_PROBS,
+        )
+        sampled_maneuver = jr.choice(
+            maneuver_key,
+            jnp.array(
+                [
+                    _base.MANEUVER_LEFT,
+                    _base.MANEUVER_STRAIGHT,
+                    _base.MANEUVER_RIGHT,
+                ],
+                dtype=jnp.int32,
+            ),
+            p=WEST_MANEUVER_PROBS,
+        )
+        sampled_relation = jr.choice(
+            relation_key, 3, p=_base.DYNAMIC_RELATION_PROBS
+        )
+        phase = (
+            sampled_phase
+            if self.phase is None
+            else jnp.asarray(self.phase, dtype=jnp.int32)
+        )
+        maneuver = (
+            sampled_maneuver
+            if self.maneuver is None
+            else jnp.asarray(self.maneuver, dtype=jnp.int32)
+        )
+        relation = (
+            sampled_relation
+            if self.dynamic_relation is None
+            else jnp.asarray(self.dynamic_relation, dtype=jnp.int32)
+        )
+        return _make_west_scene(
+            scene_key,
+            self.num_agents,
+            self.num_ref_points,
+            maneuver,
+            relation,
+            phase,
         )
 
 

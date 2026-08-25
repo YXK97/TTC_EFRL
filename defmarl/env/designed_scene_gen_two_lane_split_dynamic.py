@@ -12,10 +12,17 @@ from .designed_scene_gen_two_lane_split import (
 from defmarl.utils.typing import AgentState, Array, ObstState, PathRefs, PRNGKey
 
 
+# Geometry contract: every generated state's x/y coordinate is the rear-axle
+# center.  ``ego_lr`` and ``obst_lr`` are applied exactly once by the scaling
+# functions when they convert a state to its geometric center; the scene
+# generator must not pre-shift positions by either offset.
+
 DYNAMIC_OBST_ACCEL_RANGE = (0.1, 7.0)
 DYNAMIC_OBST_MAX_SPEED_RANGE_KMH = (10.0, 60.0)
 
 EGO_MIN_INITIAL_SPEED = 1.0 / 3.6
+EGO_MAX_SPEED = 30.0 / 3.6
+EGO_REFERENCE_SPEED_RANGE_KMH = (10.0, 30.0)
 _EGO_NOMINAL_ACCEL = 2.0
 _INITIAL_LONGITUDINAL_GAP = 10.0
 _APPROACH_MAX_INITIAL_GAP = 70.0
@@ -92,7 +99,13 @@ def _make_reference(
     terminal_lane = jnp.where(lane_change, 1 - start_lane, start_lane)
     start_y = lane_centers[start_lane]
     terminal_y = lane_centers[terminal_lane]
-    terminal_v = jr.uniform(speed_key, shape=(), dtype=jnp.float32, minval=20.0, maxval=40.0) / 3.6
+    terminal_v = jr.uniform(
+        speed_key,
+        shape=(),
+        dtype=jnp.float32,
+        minval=EGO_REFERENCE_SPEED_RANGE_KMH[0] / 3.6,
+        maxval=EGO_REFERENCE_SPEED_RANGE_KMH[1] / 3.6,
+    )
 
     def make_lane_change_reference(_):
         start = make_state(start_x, start_y, jnp.array(0.0), terminal_v)
@@ -168,18 +181,18 @@ def _make_agents(
             (num_agents,),
             dtype=jnp.float32,
             minval=EGO_MIN_INITIAL_SPEED,
-            maxval=40.0 / 3.6,
+            maxval=EGO_MAX_SPEED,
         )
         return agent_x, start_y, agent_v, y_key
 
     def make_side(_):
-        agent_x = static_x + jr.uniform(x_key, shape=(), dtype=jnp.float32, minval=-4.0, maxval=4.0)
+        agent_x = static_x + jr.uniform(x_key, shape=(), dtype=jnp.float32, minval=-8.0, maxval=0.0)
         agent_v = jr.uniform(
             speed_key,
             (num_agents,),
             dtype=jnp.float32,
             minval=EGO_MIN_INITIAL_SPEED,
-            maxval=40.0 / 3.6,
+            maxval=EGO_MAX_SPEED,
         )
         return agent_x, side_y, agent_v, y_key
 
@@ -198,7 +211,7 @@ def _make_agents(
             (num_agents,),
             dtype=jnp.float32,
             minval=EGO_MIN_INITIAL_SPEED,
-            maxval=40.0 / 3.6,
+            maxval=EGO_MAX_SPEED,
         )
         return agent_x, agent_y, agent_v, noise_key
 
@@ -209,7 +222,7 @@ def _make_agents(
             (num_agents,),
             dtype=jnp.float32,
             minval=EGO_MIN_INITIAL_SPEED,
-            maxval=40.0 / 3.6,
+            maxval=EGO_MAX_SPEED,
         )
         return agent_x, terminal_y, agent_v, y_key
 
@@ -501,8 +514,8 @@ def _make_dynamic_obstacle(
         arrival_offset_key,
         shape=(),
         dtype=jnp.float32,
-        minval=4.0,
-        maxval=8.0,
+        minval=8.0,
+        maxval=12.0,
     )
     dynamic_arrival_time = jnp.where(
         is_yield_resume,

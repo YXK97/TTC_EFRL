@@ -198,15 +198,28 @@ def test(args):
                 cost_names = [name.replace(" ", "_") for name in env.cost_components]
                 columns += [f"cost_{name}" for name in cost_names]
                 columns += [f"cost_real_{name}" for name in cost_names]
-                columns += [
-                    "boundary_alpha",
-                    "boundary_alpha_grad_x",
-                    "boundary_alpha_grad_y",
-                    "boundary_alpha_grad_heading_x",
-                    "boundary_alpha_grad_heading_y",
-                    "boundary_h_dot",
-                    "boundary_g_dot",
-                ]
+
+                def boundary_columns(prefix):
+                    return [
+                        f"{prefix}_alpha",
+                        f"{prefix}_alpha_grad_x",
+                        f"{prefix}_alpha_grad_y",
+                        f"{prefix}_alpha_grad_heading_x",
+                        f"{prefix}_alpha_grad_heading_y",
+                        f"{prefix}_h_dot",
+                        f"{prefix}_g_dot",
+                    ]
+
+                has_split_road_boundaries = hasattr(
+                    diagnostics, "lower_boundary_alpha"
+                )
+                if has_split_road_boundaries:
+                    columns += boundary_columns("lower_boundary")
+                    columns += boundary_columns("upper_boundary")
+                else:
+                    # Intersection environments expose one combined polygon
+                    # boundary constraint and retain the existing column names.
+                    columns += boundary_columns("boundary")
                 for obstacle_id in range(diagnostics.obstacle_alpha.shape[2]):
                     prefix = f"obstacle{obstacle_id:02d}"
                     columns += [
@@ -228,10 +241,33 @@ def test(args):
                         values.append(diagnostics.applied_steering[t, agent_id])
                         values.extend(costs[t, agent_id])
                         values.extend(costs_real[t, agent_id])
-                        values.append(diagnostics.boundary_alpha[t, agent_id])
-                        values.extend(diagnostics.boundary_alpha_grad[t, agent_id])
-                        values.append(diagnostics.boundary_h_dot[t, agent_id])
-                        values.append(diagnostics.boundary_g_dot[t, agent_id])
+                        if has_split_road_boundaries:
+                            for prefix in ("lower_boundary", "upper_boundary"):
+                                values.append(
+                                    getattr(diagnostics, f"{prefix}_alpha")[
+                                        t, agent_id
+                                    ]
+                                )
+                                values.extend(
+                                    getattr(diagnostics, f"{prefix}_alpha_grad")[
+                                        t, agent_id
+                                    ]
+                                )
+                                values.append(
+                                    getattr(diagnostics, f"{prefix}_h_dot")[
+                                        t, agent_id
+                                    ]
+                                )
+                                values.append(
+                                    getattr(diagnostics, f"{prefix}_g_dot")[
+                                        t, agent_id
+                                    ]
+                                )
+                        else:
+                            values.append(diagnostics.boundary_alpha[t, agent_id])
+                            values.extend(diagnostics.boundary_alpha_grad[t, agent_id])
+                            values.append(diagnostics.boundary_h_dot[t, agent_id])
+                            values.append(diagnostics.boundary_g_dot[t, agent_id])
                         for obstacle_id in range(diagnostics.obstacle_alpha.shape[2]):
                             values.append(
                                 diagnostics.obstacle_alpha[t, agent_id, obstacle_id]
