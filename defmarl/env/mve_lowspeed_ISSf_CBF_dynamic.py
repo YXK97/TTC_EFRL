@@ -5,7 +5,13 @@ import jax.numpy as jnp
 
 from typing_extensions import override
 
-from .mve_lowspeed_CBF_dynamic import MVELaneChangeAndOverTake_LowSpeed_CBF_Dynamic
+from .designed_scene_gen_two_lane_split_dynamic import (
+    gen_deterministic_scene_two_lane_with_id,
+)
+from .mve_lowspeed_CBF_dynamic import (
+    MVEDynamicEnvState,
+    MVELaneChangeAndOverTake_LowSpeed_CBF_Dynamic,
+)
 from .mve_lowspeed_ISSf_CBF import (
     LowSpeedSafetyDiagnostics,
     MVELaneChangeAndOverTake_LowSpeed_ISSf_CBF,
@@ -19,8 +25,8 @@ from defmarl.utils.scaling_lowspeed import (
     scaling_calc_parameterized,
     scaling_calc_unbounded_bound,
 )
-from defmarl.utils.typing import Action, Cost, Reward
-from defmarl.utils.utils import gen_i_j_pairs
+from defmarl.utils.typing import Action, Array, Cost, Reward
+from defmarl.utils.utils import find_closest_goal_indices, gen_i_j_pairs
 
 
 class MVELaneChangeAndOverTake_LowSpeed_ISSf_CBF_Dynamic(MVELaneChangeAndOverTake_LowSpeed_CBF_Dynamic):
@@ -63,6 +69,12 @@ class MVELaneChangeAndOverTake_LowSpeed_ISSf_CBF_Dynamic(MVELaneChangeAndOverTak
         reference_type = "LANE_CHANGE" if scene_id < len(self._SCENE_PHASE_NAMES) else "OVERTAKE"
         phase = self._SCENE_PHASE_NAMES[scene_id % len(self._SCENE_PHASE_NAMES)]
         return f"Scene: {reference_type} / {phase}"
+
+    def reset_deterministic(
+        self, scene_index: Array
+    ) -> Tuple[GraphsTuple, Array]:
+        """Reset to one of the four fixed two-lane demonstration scenes."""
+        return _reset_deterministic_two_lane(self, scene_index)
 
     @override
     def get_cost(self, graph: GraphsTuple, action: Action) -> Tuple[Cost, Cost]:
@@ -148,6 +160,45 @@ def _safe_compressed_diagnostic_terms(env, alpha_fn, state, steering):
         jnp.dot(barrier_grad, pose_dot),
         jnp.dot(barrier_grad, steering_channel),
     )
+
+
+def _reset_deterministic_two_lane(env, scene_index):
+    """Shared deterministic reset used by both straight ISSf variants."""
+    (
+        agents,
+        obstacles,
+        all_goals,
+        all_derivatives,
+        dynamic_accel,
+        dynamic_max_speed,
+        scene_id,
+    ) = gen_deterministic_scene_two_lane_with_id(
+        scene_index,
+        env.num_agents,
+        env.num_goals,
+        env.params["default_state_range"][:2],
+        env.params["default_state_range"][2:4],
+        env.params["lane_width"],
+        env.params["lane_centers"],
+    )
+    env.all_goals = all_goals
+    env.all_dsYddts = all_derivatives
+    goal_indices = find_closest_goal_indices(
+        env._observable(agents), env._observable(all_goals)
+    )
+    agent_indices = jnp.arange(agents.shape[0])
+    goals = all_goals[agent_indices, goal_indices, :]
+    derivatives = all_derivatives[agent_indices, goal_indices, :]
+    env.num_obsts = obstacles.shape[0]
+    env_state = MVEDynamicEnvState(
+        agents,
+        goals,
+        obstacles,
+        dynamic_accel,
+        dynamic_max_speed,
+        scene_id,
+    )
+    return env.get_graph(env_state), derivatives
 
 
 def _get_safe_compressed_cost(env, graph, action):

@@ -59,6 +59,11 @@ def test(args):
     )
     if args.scene_mode is not None:
         env.params["scene_mode"] = args.scene_mode
+    if args.deterministic_scene and not hasattr(env, "reset_deterministic"):
+        raise ValueError(
+            f"Environment {type(env).__name__} does not provide the four "
+            "deterministic demonstration scenes."
+        )
 
     path = args.path
     model_path = os.path.join(path, "models")
@@ -114,9 +119,13 @@ def test(args):
     init_rnn_state = algo.init_rnn_state
     init_Vh_rnn_state = algo.init_Vh_rnn_state if hasattr(algo, "init_Vh_rnn_state") else None
 
+    num_episodes = 4 if args.deterministic_scene else args.epi
     test_key = jr.PRNGKey(args.seed)
-    test_keys = jr.split(test_key, args.epi)
-    test_keys = test_keys[args.offset:]
+    test_keys = jr.split(test_key, num_episodes)
+    if not args.deterministic_scene:
+        test_keys = test_keys[args.offset:]
+    else:
+        print("> Deterministic scenes enabled: running scene 0 through 3")
 
     rollout_fn = ft.partial(eval_rollout,
                             env,
@@ -135,9 +144,17 @@ def test(args):
     rates = []
     rollouts = []
 
-    for i_epi in range(args.epi):
+    for i_epi in range(num_episodes):
         key_x0, _ = jr.split(test_keys[i_epi], 2)
-        rollout: Rollout = rollout_fn(key_x0)
+        if args.deterministic_scene:
+            rollout: Rollout = rollout_fn(
+                key_x0,
+                deterministic_scene_index=jnp.asarray(
+                    i_epi, dtype=jnp.int32
+                ),
+            )
+        else:
+            rollout: Rollout = rollout_fn(key_x0)
 
         if args.output_csv:
             T_graph = rollout.graph
@@ -345,7 +362,7 @@ def test(args):
 
     if args.log:
         with open(os.path.join(path, "test_log.csv"), "a") as f:
-            f.write(f"{env.num_agents},{args.epi},{env.max_episode_steps},"
+            f.write(f"{env.num_agents},{num_episodes},{env.max_episode_steps},"
                     f"{env.area_size},{env.params['n_obs']},"
                     f"{safe_mean * 100:.3f},{safe_std * 100:.3f}\n")
 
@@ -368,6 +385,12 @@ def main():
     parser.add_argument("--reward_min", type=float, default=None)
     parser.add_argument("--reward_max", type=float, default=None)
     parser.add_argument("--epi", type=int, default=5)
+    parser.add_argument(
+        "--deterministic-scene",
+        action="store_true",
+        default=False,
+        help="Ignore --epi/--offset and run the four fixed demonstration scenes.",
+    )
     parser.add_argument("--no-video", action="store_true", default=False)
     parser.add_argument("--from-iter", type=int, default=None)
     parser.add_argument("-n", "--num-agents", type=int, default=None)

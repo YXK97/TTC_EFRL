@@ -164,10 +164,14 @@ def eval_rollout(
         key: PRNGKey,
         init_Vh_rnn_state: Optional[Array] = None,
         z_fn: Optional[Callable] = None,
-        stochastic: bool = False
+        stochastic: bool = False,
+        deterministic_scene_index: Optional[Array] = None,
 ):
     key_x0, key = jax.random.split(key)
-    init_graph, _ = env.reset(key_x0)
+    if deterministic_scene_index is None:
+        init_graph, _ = env.reset(key_x0)
+    else:
+        init_graph, _ = env.reset_deterministic(deterministic_scene_index)
     if z_fn is not None:
         z0 = jax.random.uniform(key, (env.num_agents, 1), minval=-env.reward_max, maxval=-env.reward_min)
     else:

@@ -8,6 +8,7 @@ from .mve_lowspeed_CBF_dynamic import MVELaneChangeAndOverTake_LowSpeed_CBF_Dyna
 from .mve_lowspeed_ISSf_CBF import MVELaneChangeAndOverTake_LowSpeed_ISSf_CBF
 from .mve_lowspeed_ISSf_CBF_dynamic import (
     _get_safe_compressed_cost,
+    _reset_deterministic_two_lane,
     _safe_compressed_diagnostic_terms,
 )
 from .mve_lowspeed_ISSf_CBF import LowSpeedSafetyDiagnostics
@@ -51,6 +52,10 @@ class MVELaneChangeAndOverTake_LowSpeed_ISSf_CBF_Dynamic2(MVELaneChangeAndOverTa
         reference_type = "LANE_CHANGE" if scene_id < len(self._SCENE_PHASE_NAMES) else "OVERTAKE"
         phase = self._SCENE_PHASE_NAMES[scene_id % len(self._SCENE_PHASE_NAMES)]
         return f"Scene: {reference_type} / {phase}"
+
+    def reset_deterministic(self, scene_index):
+        """Reset to one of the four fixed two-lane demonstration scenes."""
+        return _reset_deterministic_two_lane(self, scene_index)
 
     @override
     def get_cost(self, graph: GraphsTuple, action: Action) -> Tuple[Cost, Cost]:

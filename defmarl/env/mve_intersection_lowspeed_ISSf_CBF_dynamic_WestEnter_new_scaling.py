@@ -17,9 +17,10 @@ from defmarl.utils.scaling_lowspeed import (
     scaling_calc_parameterized,
 )
 from defmarl.utils.typing import Action, Array, Cost, Reward, State
-from defmarl.utils.utils import gen_i_j_pairs
+from defmarl.utils.utils import find_closest_goal_indices, gen_i_j_pairs
 
 from .designed_scene_gen_intersection_split_dynamic_WestEnter import (
+    gen_deterministic_scene_WestEnter_with_id,
     gen_scene_randomly_split_dynamic_WestEnter_with_id,
 )
 from .mve_intersection_lowspeed_ISSf_CBF_dynamic_new_scaling import (
@@ -29,6 +30,7 @@ from .mve_intersection_lowspeed_ISSf_CBF_dynamic_new_scaling import (
 )
 from .mve_intersection_lowspeed_ISSf_CBF_dynamic import (
     IntersectionSafetyDiagnostics,
+    MVEIntersectionLowSpeedDynamicState,
     intersection_corner_extreme_points,
     intersection_corner_halfspaces,
 )
@@ -57,7 +59,7 @@ class MVEIntersection_LowSpeed_ISSf_CBF_Dynamic_WestEnter_NewScaling(
 
             # Match the straight-road environment: apply a small constant
             # penalty until ego has longitudinally passed the static vehicle.
-            "pre_static_penalty": 0.2,
+            "pre_static_penalty": 0.02,
             # Adjacent Bezier lanes have slightly different curvature.  A
             # small margin prevents equal curve progress in the other lane
             # from being classified as already past because of projection
@@ -101,6 +103,46 @@ class MVEIntersection_LowSpeed_ISSf_CBF_Dynamic_WestEnter_NewScaling(
             self.params["ego_lr"],
         )
         return jnp.min(corner_alphas)
+
+    def reset_deterministic(
+        self, scene_index: Array
+    ) -> Tuple[GraphsTuple, Array]:
+        """Reset to one of the four fixed WestEnter demonstration scenes."""
+        (
+            agents,
+            obstacles,
+            all_goals,
+            all_derivatives,
+            dynamic_accel,
+            dynamic_target_speed,
+            scene_id,
+        ) = gen_deterministic_scene_WestEnter_with_id(
+            scene_index,
+            self.num_agents,
+            self.num_goals,
+            self.params["default_state_range"][:2],
+            self.params["default_state_range"][2:4],
+            self.params["lane_width"],
+            self.params["lane_centers"],
+        )
+        self.all_goals = all_goals
+        self.all_dsYddts = all_derivatives
+        goal_indices = find_closest_goal_indices(
+            self._observable(agents), self._observable(all_goals)
+        )
+        agent_indices = jnp.arange(agents.shape[0])
+        goals = all_goals[agent_indices, goal_indices, :]
+        derivatives = all_derivatives[agent_indices, goal_indices, :]
+        self.num_obsts = obstacles.shape[0]
+        env_state = MVEIntersectionLowSpeedDynamicState(
+            agents,
+            goals,
+            obstacles,
+            dynamic_accel,
+            dynamic_target_speed,
+            scene_id,
+        )
+        return self.get_graph(env_state), derivatives
 
     @override
     def _issf_constraint(
@@ -319,7 +361,7 @@ class MVEIntersection_LowSpeed_ISSf_CBF_Dynamic_WestEnter_NewScaling(
         agent = self._observable(graph.env_states.agent)
         goal = self._observable(graph.env_states.goal)
         error = agent - goal
-        weight = jnp.diag(jnp.array([2.5e-4, 2.5e-4, 0, 0, 5e-4, 0]))
+        weight = jnp.diag(jnp.array([2.5e-6, 2.5e-6, 0, 0, 5e-6, 0]))
         reward = -jnp.sqrt(
             jnp.einsum("ai,ij,ja->a", error, weight, error.transpose())
         ).mean()

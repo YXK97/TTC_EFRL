@@ -29,6 +29,18 @@ EGO_MIN_SPEED = 1.0 / 3.6
 EGO_MAX_SPEED = 30.0 / 3.6
 EGO_REFERENCE_SPEED_RANGE_KMH = (10.0, 30.0)
 
+# Deterministic demonstration parameters.  These conservative values are
+# inside the training ranges and are practical for a small dummy-vehicle
+# chassis.  The moving obstacle starts from rest in all four scenes.
+DETERMINISTIC_EGO_TARGET_SPEED = 20.0 / 3.6
+DETERMINISTIC_DYNAMIC_ACCEL = 0.6
+DETERMINISTIC_DYNAMIC_TARGET_SPEED = 10.0 / 3.6
+DETERMINISTIC_EGO_PROGRESS = -5.0
+DETERMINISTIC_STATIC_PROGRESS = 25.0
+# With the nominal 2 m/s^2 ego acceleration, ego reaches the center in about
+# 11.15 s; the moving obstacle covers these 24 m in about 10.95 s.
+DETERMINISTIC_DYNAMIC_ENTRY_DISTANCE = 24.0
+
 # PASSED and DONE do not help the early avoidance curriculum.  Renormalizing
 # the former START/APPROACH/SIDE weights (0.20/0.35/0.20) preserves their
 # relative frequency while assigning exactly zero mass to the last two phases.
@@ -77,12 +89,12 @@ def _sample_west_path_positions(
         return static_s, static_s - gap
 
     def approach_phase(_):
-        # APPROACH begins closer to the static vehicle than START.  Sampling
-        # static_s from 10 m also adds cases where both vehicles are still well
-        # inside the straight entrance section.
+        # APPROACH must leave enough distance for steering-rate-limited ego to
+        # enter the adjacent lane before reaching the static vehicle.  Do not
+        # cap the gap by static_s: negative ego progress is valid and places
+        # ego west of the nominal x=-50 m initialization window.
         static_s = jr.uniform(static_key, (), minval=10.0, maxval=early_limit)
-        max_gap = jnp.minimum(18.0, static_s)
-        gap = jr.uniform(gap_key, (), minval=8.0, maxval=max_gap)
+        gap = jr.uniform(gap_key, (), minval=24.0, maxval=36.0)
         return static_s, static_s - gap
 
     def side_phase(_):
@@ -466,6 +478,110 @@ def gen_scene_randomly_split_dynamic_WestEnter_with_id(
         lane_width,
         lane_centers,
     ).make_with_id()
+
+
+def gen_deterministic_scene_WestEnter_with_id(
+    scene_index: Array,
+    num_agents: int,
+    num_ref_points: int,
+    xrange: Array,
+    yrange: Array,
+    lane_width: float,
+    lane_centers: Array,
+) -> Tuple[AgentState, ObstState, PathRefs, Array, Array, Array, Array]:
+    """Build one of four fixed WestEnter demonstration scenes.
+
+    Scene order:
+      0. straight, east-to-west moving obstacle;
+      1. straight, north-to-south moving obstacle;
+      2. left turn, east-to-west moving obstacle;
+      3. left turn, north-to-south moving obstacle.
+
+    ``xrange``, ``yrange``, ``lane_width`` and ``lane_centers`` remain in the
+    signature so this function can replace the random generator directly.
+    Road geometry itself is owned by the shared intersection generator.
+    """
+    del xrange, yrange, lane_width, lane_centers
+    scene_index = jnp.clip(jnp.asarray(scene_index, dtype=jnp.int32), 0, 3)
+    maneuver = jnp.array(
+        [
+            _base.MANEUVER_STRAIGHT,
+            _base.MANEUVER_STRAIGHT,
+            _base.MANEUVER_LEFT,
+            _base.MANEUVER_LEFT,
+        ],
+        dtype=jnp.int32,
+    )[scene_index]
+    dynamic_road = jnp.array([1, 2, 1, 2], dtype=jnp.int32)[scene_index]
+    relation = jnp.array(
+        [
+            _base.DYNAMIC_OPPOSITE_DIRECTION,
+            _base.DYNAMIC_PERPENDICULAR,
+            _base.DYNAMIC_OPPOSITE_DIRECTION,
+            _base.DYNAMIC_PERPENDICULAR,
+        ],
+        dtype=jnp.int32,
+    )[scene_index]
+
+    # For west-to-east travel, lane index 1 is the lower world-y lane.
+    start_road_idx = jnp.asarray(WEST_ROAD_IDX, dtype=jnp.int32)
+    ego_lane_idx = jnp.asarray(1, dtype=jnp.int32)
+    ego_xy, ego_heading, _, _ = _base._path_geometry(
+        jnp.asarray(DETERMINISTIC_EGO_PROGRESS, dtype=jnp.float32),
+        start_road_idx,
+        maneuver,
+        ego_lane_idx,
+    )
+    ego_state = _base._make_state(
+        ego_xy, ego_heading, jnp.asarray(EGO_MIN_SPEED, dtype=jnp.float32)
+    )
+    agents = jnp.repeat(ego_state[None, :], num_agents, axis=0)
+
+    goals, derivatives, _ = _base._generate_reference(
+        num_agents,
+        num_ref_points,
+        start_road_idx,
+        maneuver,
+        ego_lane_idx,
+        jnp.asarray(DETERMINISTIC_EGO_TARGET_SPEED, dtype=jnp.float32),
+        jnp.asarray(DETERMINISTIC_EGO_PROGRESS, dtype=jnp.float32),
+    )
+    static_obstacle = _base._make_static_obstacle(
+        jnp.asarray(DETERMINISTIC_STATIC_PROGRESS, dtype=jnp.float32),
+        start_road_idx,
+        maneuver,
+        ego_lane_idx,
+    )
+
+    # East road lane 1 is the upper world-y lane.  North road lane 0 has
+    # world x=+1.65 m and directly conflicts with the ego left-turn exit lane.
+    dynamic_lane_idx = jnp.where(dynamic_road == 1, 1, 0)
+    dynamic_lane_offset = _base._lane_centers(dynamic_road)[dynamic_lane_idx]
+    dynamic_xy = _base._road_point(
+        dynamic_road,
+        jnp.asarray(-DETERMINISTIC_DYNAMIC_ENTRY_DISTANCE, dtype=jnp.float32),
+        dynamic_lane_offset,
+    )
+    dynamic_obstacle = _base._make_state(
+        dynamic_xy,
+        _base.ROAD_DIRS[dynamic_road],
+        jnp.asarray(0.0, dtype=jnp.float32),
+    )
+    obstacles = jnp.stack([static_obstacle, dynamic_obstacle], axis=0)
+    scene_id = (
+        (start_road_idx * _base.NUM_MANEUVERS + maneuver)
+        * _base.NUM_DYNAMIC_RELATIONS
+        + relation
+    ) * _base.NUM_PHASES + _base.PHASE_START
+    return (
+        agents,
+        obstacles,
+        goals,
+        derivatives,
+        jnp.asarray(DETERMINISTIC_DYNAMIC_ACCEL, dtype=jnp.float32),
+        jnp.asarray(DETERMINISTIC_DYNAMIC_TARGET_SPEED, dtype=jnp.float32),
+        scene_id,
+    )
 
 
 # Keep the conventional generator names available inside this dedicated module.
