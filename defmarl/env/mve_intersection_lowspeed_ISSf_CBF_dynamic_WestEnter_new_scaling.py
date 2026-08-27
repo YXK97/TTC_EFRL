@@ -19,8 +19,10 @@ from defmarl.utils.scaling_lowspeed import (
 from defmarl.utils.typing import Action, Array, Cost, Reward, State
 from defmarl.utils.utils import find_closest_goal_indices, gen_i_j_pairs
 
-from .designed_scene_gen_intersection_split_dynamic_WestEnter import (
+from .designed_scene_gen_intersection_deterministic_WestEnter import (
     gen_deterministic_scene_WestEnter_with_id,
+)
+from .designed_scene_gen_intersection_split_dynamic_WestEnter import (
     gen_scene_randomly_split_dynamic_WestEnter_with_id,
 )
 from .mve_intersection_lowspeed_ISSf_CBF_dynamic_new_scaling import (

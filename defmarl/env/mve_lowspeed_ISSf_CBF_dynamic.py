@@ -5,7 +5,7 @@ import jax.numpy as jnp
 
 from typing_extensions import override
 
-from .designed_scene_gen_two_lane_split_dynamic import (
+from .designed_scene_gen_two_lane_deterministic import (
     gen_deterministic_scene_two_lane_with_id,
 )
 from .mve_lowspeed_CBF_dynamic import (

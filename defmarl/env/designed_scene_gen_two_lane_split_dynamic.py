@@ -42,24 +42,6 @@ _YIELD_RESUME = 5
 _EGO_FIRST = 6
 _NUM_PHASES = 7
 
-# Fixed demonstration values chosen inside the training ranges and kept mild
-# enough for a small dummy-vehicle chassis.  Both moving-obstacle variants
-# start at zero speed; only acceleration and final speed differ.
-DETERMINISTIC_EGO_TARGET_SPEED = 20.0 / 3.6
-DETERMINISTIC_STATIC_X = 45.0
-DETERMINISTIC_EGO_X = 0.0
-DETERMINISTIC_LANE_CHANGE_START_X = 15.0
-DETERMINISTIC_LANE_CHANGE_END_X = 35.0
-# Ego nominally reaches static_x in 9.35 s.  The fast vehicle reaches the same
-# x in 8.72 s (yield first); the slow vehicle needs 13.63 s (ego first).
-DETERMINISTIC_FAST_ACCEL = 1.0
-DETERMINISTIC_FAST_SPEED = 20.0 / 3.6
-DETERMINISTIC_FAST_INITIAL_X = 12.0
-DETERMINISTIC_SLOW_ACCEL = 0.3
-DETERMINISTIC_SLOW_SPEED = 10.0 / 3.6
-DETERMINISTIC_SLOW_INITIAL_X = 20.0
-
-
 def _accelerating_distance(v0: Array, target_v: Array, accel: float, t: Array) -> Array:
     """Distance travelled while accelerating uniformly and then cruising."""
     accel = jnp.asarray(accel, dtype=jnp.float32)
@@ -737,105 +719,6 @@ def gen_scene_randomly_split_dynamic_with_id(
         yrange,
         lane_width,
         lane_centers,
-    )
-
-
-def gen_deterministic_scene_two_lane_with_id(
-    scene_index: Array,
-    num_agents: int,
-    num_ref_points: int,
-    xrange: Array,
-    yrange: Array,
-    lane_width: float,
-    lane_centers: Array,
-):
-    """Build one of four fixed two-lane demonstration scenes.
-
-    Scene order is straight/fast, straight/slow, lane-change/fast, and
-    lane-change/slow.  Fast scenes represent YIELD_RESUME; slow scenes
-    represent EGO_FIRST.
-    """
-    del yrange, lane_width
-    scene_index = jnp.clip(jnp.asarray(scene_index, dtype=jnp.int32), 0, 3)
-    lane_change = scene_index >= 2
-    fast_dynamic = (scene_index % 2) == 0
-    lower_lane = jnp.argmin(lane_centers)
-    upper_lane = jnp.argmax(lane_centers)
-    lower_y = lane_centers[lower_lane]
-    upper_y = lane_centers[upper_lane]
-    target_speed = jnp.asarray(
-        DETERMINISTIC_EGO_TARGET_SPEED, dtype=jnp.float32
-    )
-
-    def make_lane_change_reference(_):
-        start = make_state(
-            jnp.asarray(DETERMINISTIC_LANE_CHANGE_START_X, dtype=jnp.float32),
-            lower_y,
-            jnp.asarray(0.0, dtype=jnp.float32),
-            target_speed,
-        )
-        terminal = make_state(
-            jnp.asarray(DETERMINISTIC_LANE_CHANGE_END_X, dtype=jnp.float32),
-            upper_y,
-            jnp.asarray(0.0, dtype=jnp.float32),
-            target_speed,
-        )
-        return generate_lanechange_path_points(
-            xrange, num_agents, num_ref_points, start, terminal
-        )
-
-    def make_straight_reference(_):
-        return generate_horizontal_path_points(
-            xrange, num_agents, num_ref_points, lower_y, target_speed
-        )
-
-    goals, derivatives = jax.lax.cond(
-        lane_change,
-        make_lane_change_reference,
-        make_straight_reference,
-        operand=None,
-    )
-    ego_state = make_state(
-        jnp.asarray(DETERMINISTIC_EGO_X, dtype=jnp.float32),
-        lower_y,
-        jnp.asarray(0.0, dtype=jnp.float32),
-        jnp.asarray(EGO_MIN_INITIAL_SPEED, dtype=jnp.float32),
-    )
-    agents = jnp.repeat(ego_state[None, :], num_agents, axis=0)
-    static_state = make_state(
-        jnp.asarray(DETERMINISTIC_STATIC_X, dtype=jnp.float32),
-        lower_y,
-        jnp.asarray(0.0, dtype=jnp.float32),
-        jnp.asarray(0.0, dtype=jnp.float32),
-    )
-    dynamic_x = jnp.where(
-        fast_dynamic,
-        DETERMINISTIC_FAST_INITIAL_X,
-        DETERMINISTIC_SLOW_INITIAL_X,
-    )
-    dynamic_state = make_state(
-        jnp.asarray(dynamic_x, dtype=jnp.float32),
-        upper_y,
-        jnp.asarray(0.0, dtype=jnp.float32),
-        jnp.asarray(0.0, dtype=jnp.float32),
-    )
-    dynamic_accel = jnp.where(
-        fast_dynamic, DETERMINISTIC_FAST_ACCEL, DETERMINISTIC_SLOW_ACCEL
-    ).astype(jnp.float32)
-    dynamic_max_speed = jnp.where(
-        fast_dynamic, DETERMINISTIC_FAST_SPEED, DETERMINISTIC_SLOW_SPEED
-    ).astype(jnp.float32)
-    phase = jnp.where(fast_dynamic, _YIELD_RESUME, _EGO_FIRST)
-    scene_id = jnp.where(lane_change, 0, _NUM_PHASES) + phase
-    obstacles = jnp.stack([static_state, dynamic_state], axis=0)
-    return (
-        agents,
-        obstacles,
-        goals,
-        derivatives,
-        dynamic_accel,
-        dynamic_max_speed,
-        scene_id,
     )
 
 
