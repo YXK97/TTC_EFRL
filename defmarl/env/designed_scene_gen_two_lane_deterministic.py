@@ -14,21 +14,18 @@ from defmarl.utils.typing import AgentState, Array, ObstState, PathRefs
 
 
 EGO_MIN_SPEED = 1.0 / 3.6
-EGO_TARGET_SPEED = 20.0 / 3.6
+EGO_TARGET_SPEED = 15.0 / 3.6
 STATIC_X = 50.0
 EGO_X = 10.0
-LANE_CHANGE_START_X = 55.0
-LANE_CHANGE_END_X = 95.0
+LANE_CHANGE_START_X = 45.0
+LANE_CHANGE_END_X = 85.0
 
-# Ego reaches static_x in about 8.45 s.  The fast vehicle starts behind ego,
-# reaches static_x in about 7.72 s and lane-change start in about 8.32 s.  The
-# slow vehicle reaches static_x only after about 15.43 s.
-FAST_ACCEL = 2.0
-FAST_SPEED = 30.0 / 3.6
-FAST_INITIAL_X = 3.0
+FAST_ACCEL = 6.0
+FAST_SPEED = 40.0 / 3.6
+FAST_INITIAL_X = -12.0
 SLOW_ACCEL = 0.3
 SLOW_SPEED = 10.0 / 3.6
-SLOW_INITIAL_X = 20.0
+SLOW_INITIAL_X = 26.0
 
 YIELD_RESUME = 5
 EGO_FIRST = 6

@@ -72,6 +72,11 @@ class MVEIntersection_LowSpeed_ISSf_CBF_Dynamic_WestEnter_NewScaling(
             # Keep alpha and its hard minimum unchanged.  Only the safe side
             # of h=alpha-alpha_thresh is compressed before ISSf evaluation.
             "issf_safe_barrier_kappa": 1.0,
+            # Total probability of drawing one of the four fixed WestEnter
+            # scenes during training.  Each fixed scene therefore has
+            # probability 0.02 / 4 = 0.5%; all other resets retain the split
+            # scene distribution.
+            "deterministic_scene_train_probability": 0.02,
         }
     )
 
@@ -110,15 +115,7 @@ class MVEIntersection_LowSpeed_ISSf_CBF_Dynamic_WestEnter_NewScaling(
         self, scene_index: Array
     ) -> Tuple[GraphsTuple, Array]:
         """Reset to one of the four fixed WestEnter demonstration scenes."""
-        (
-            agents,
-            obstacles,
-            all_goals,
-            all_derivatives,
-            dynamic_accel,
-            dynamic_target_speed,
-            scene_id,
-        ) = gen_deterministic_scene_WestEnter_with_id(
+        scene = gen_deterministic_scene_WestEnter_with_id(
             scene_index,
             self.num_agents,
             self.num_goals,
@@ -127,24 +124,58 @@ class MVEIntersection_LowSpeed_ISSf_CBF_Dynamic_WestEnter_NewScaling(
             self.params["lane_width"],
             self.params["lane_centers"],
         )
-        self.all_goals = all_goals
-        self.all_dsYddts = all_derivatives
-        goal_indices = find_closest_goal_indices(
-            self._observable(agents), self._observable(all_goals)
+        return _build_westenter_reset(self, scene)
+
+    @override
+    def reset(self, key: Array) -> Tuple[GraphsTuple, Array]:
+        """Mix the four fixed WestEnter scenes into training at low rate."""
+        select_key, fixed_index_key, split_key = jax.random.split(key, 3)
+        fixed_probability = jnp.clip(
+            jnp.asarray(
+                self.params.get(
+                    "deterministic_scene_train_probability", 0.02
+                ),
+                dtype=jnp.float32,
+            ),
+            0.0,
+            1.0,
         )
-        agent_indices = jnp.arange(agents.shape[0])
-        goals = all_goals[agent_indices, goal_indices, :]
-        derivatives = all_derivatives[agent_indices, goal_indices, :]
-        self.num_obsts = obstacles.shape[0]
-        env_state = MVEIntersectionLowSpeedDynamicState(
-            agents,
-            goals,
-            obstacles,
-            dynamic_accel,
-            dynamic_target_speed,
-            scene_id,
+        use_fixed_scene = jax.random.bernoulli(
+            select_key, p=fixed_probability
         )
-        return self.get_graph(env_state), derivatives
+        fixed_scene_index = jax.random.randint(
+            fixed_index_key, (), minval=0, maxval=4, dtype=jnp.int32
+        )
+
+        def make_fixed_scene(_):
+            return gen_deterministic_scene_WestEnter_with_id(
+                fixed_scene_index,
+                self.num_agents,
+                self.num_goals,
+                self.params["default_state_range"][:2],
+                self.params["default_state_range"][2:4],
+                self.params["lane_width"],
+                self.params["lane_centers"],
+            )
+
+        def make_split_scene(_):
+            return gen_scene_randomly_split_dynamic_WestEnter_with_id(
+                split_key,
+                self.num_agents,
+                self.num_goals,
+                self.params["default_state_range"][:2],
+                self.params["default_state_range"][2:4],
+                self.params["lane_width"],
+                self.params["lane_centers"],
+            )
+
+        # Select only the generated arrays inside lax.cond.  Assigning traced
+        # arrays to self from either branch would leak tracers under rollout
+        # JIT, so graph construction and cached references happen afterwards.
+        scene = jax.lax.cond(
+            use_fixed_scene, make_fixed_scene, make_split_scene, operand=None
+        )
+        return _build_westenter_reset(self, scene)
 
     @override
     def _issf_constraint(
@@ -403,6 +434,37 @@ class MVEIntersection_LowSpeed_ISSf_CBF_Dynamic_WestEnter_NewScaling(
 MVEIntersectionLowSpeedISSfCBFDynamicWestEnterNewScaling = (
     MVEIntersection_LowSpeed_ISSf_CBF_Dynamic_WestEnter_NewScaling
 )
+
+
+def _build_westenter_reset(env, scene):
+    """Convert either WestEnter scene source into the common graph state."""
+    (
+        agents,
+        obstacles,
+        all_goals,
+        all_derivatives,
+        dynamic_accel,
+        dynamic_target_speed,
+        scene_id,
+    ) = scene
+    env.all_goals = all_goals
+    env.all_dsYddts = all_derivatives
+    goal_indices = find_closest_goal_indices(
+        env._observable(agents), env._observable(all_goals)
+    )
+    agent_indices = jnp.arange(agents.shape[0])
+    goals = all_goals[agent_indices, goal_indices, :]
+    derivatives = all_derivatives[agent_indices, goal_indices, :]
+    env.num_obsts = obstacles.shape[0]
+    env_state = MVEIntersectionLowSpeedDynamicState(
+        agents,
+        goals,
+        obstacles,
+        dynamic_accel,
+        dynamic_target_speed,
+        scene_id,
+    )
+    return env.get_graph(env_state), derivatives
 
 
 @jax.jit

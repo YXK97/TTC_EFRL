@@ -8,6 +8,9 @@ from typing_extensions import override
 from .designed_scene_gen_two_lane_deterministic import (
     gen_deterministic_scene_two_lane_with_id,
 )
+from .designed_scene_gen_two_lane_split_dynamic import (
+    gen_scene_randomly_split_dynamic_with_id,
+)
 from .mve_lowspeed_CBF_dynamic import (
     MVEDynamicEnvState,
     MVELaneChangeAndOverTake_LowSpeed_CBF_Dynamic,
@@ -51,7 +54,11 @@ class MVELaneChangeAndOverTake_LowSpeed_ISSf_CBF_Dynamic(MVELaneChangeAndOverTak
         "issf_safe_barrier_kappa": 1.0,
         # Applied until ego's center passes the static obstacle. Keep this
         # ISSf-specific so the ordinary dynamic CBF environment is unchanged.
-        "pre_static_penalty": 0.05,
+        "pre_static_penalty": 0.02,
+        # Total probability of drawing one of the four fixed demonstration
+        # scenes during training. Each fixed scene therefore has probability
+        # 0.05 / 4 = 1.25%; all other resets retain the split distribution.
+        "deterministic_scene_train_probability": 0.02,
     })
 
     _SCENE_PHASE_NAMES = (
@@ -77,6 +84,11 @@ class MVELaneChangeAndOverTake_LowSpeed_ISSf_CBF_Dynamic(MVELaneChangeAndOverTak
         return _reset_deterministic_two_lane(self, scene_index)
 
     @override
+    def reset(self, key: Array) -> Tuple[GraphsTuple, Array]:
+        """Mix the four fixed scenes into training with a small probability."""
+        return _reset_training_scene_mixture(self, key)
+
+    @override
     def get_cost(self, graph: GraphsTuple, action: Action) -> Tuple[Cost, Cost]:
         return _get_safe_compressed_cost(self, graph, action)
 
@@ -100,7 +112,7 @@ class MVELaneChangeAndOverTake_LowSpeed_ISSf_CBF_Dynamic(MVELaneChangeAndOverTak
         agent = self._observable(graph.env_states.agent)
         goal = self._observable(graph.env_states.goal)
         e = agent - goal
-        W = jnp.diag(jnp.array([2.5e-4, 2.5e-4, 0, 0, 5e-4, 0]))
+        W = jnp.diag(jnp.array([2.5e-6, 2.5e-6, 0, 0, 5e-6, 0]))
         reward = -jnp.sqrt(jnp.einsum("ai,ij,ja->a", e, W, e.transpose())).mean()
         # reward -= (action[:, 0] ** 2).mean() * 0.0001
         # reward -= (action[:, 1] ** 2).mean() * 0.0001
@@ -164,15 +176,7 @@ def _safe_compressed_diagnostic_terms(env, alpha_fn, state, steering):
 
 def _reset_deterministic_two_lane(env, scene_index):
     """Shared deterministic reset used by both straight ISSf variants."""
-    (
-        agents,
-        obstacles,
-        all_goals,
-        all_derivatives,
-        dynamic_accel,
-        dynamic_max_speed,
-        scene_id,
-    ) = gen_deterministic_scene_two_lane_with_id(
+    scene = gen_deterministic_scene_two_lane_with_id(
         scene_index,
         env.num_agents,
         env.num_goals,
@@ -181,6 +185,66 @@ def _reset_deterministic_two_lane(env, scene_index):
         env.params["lane_width"],
         env.params["lane_centers"],
     )
+    return _build_two_lane_reset(env, scene)
+
+
+def _reset_training_scene_mixture(env, key):
+    """Select split or fixed scene data, then construct one common reset."""
+    select_key, fixed_index_key, split_key = jax.random.split(key, 3)
+    fixed_probability = jnp.clip(
+        jnp.asarray(
+            env.params.get("deterministic_scene_train_probability", 0.05),
+            dtype=jnp.float32,
+        ),
+        0.0,
+        1.0,
+    )
+    use_fixed_scene = jax.random.bernoulli(
+        select_key, p=fixed_probability
+    )
+    fixed_scene_index = jax.random.randint(
+        fixed_index_key, (), minval=0, maxval=4, dtype=jnp.int32
+    )
+
+    def make_fixed_scene(_):
+        return gen_deterministic_scene_two_lane_with_id(
+            fixed_scene_index,
+            env.num_agents,
+            env.num_goals,
+            env.params["default_state_range"][:2],
+            env.params["default_state_range"][2:4],
+            env.params["lane_width"],
+            env.params["lane_centers"],
+        )
+
+    def make_split_scene(_):
+        return gen_scene_randomly_split_dynamic_with_id(
+            split_key,
+            env.num_agents,
+            env.num_goals,
+            env.params["default_state_range"][:2],
+            env.params["default_state_range"][2:4],
+            env.params["lane_width"],
+            env.params["lane_centers"],
+        )
+
+    scene = jax.lax.cond(
+        use_fixed_scene, make_fixed_scene, make_split_scene, operand=None
+    )
+    return _build_two_lane_reset(env, scene)
+
+
+def _build_two_lane_reset(env, scene):
+    """Convert generated scene arrays into the shared dynamic graph state."""
+    (
+        agents,
+        obstacles,
+        all_goals,
+        all_derivatives,
+        dynamic_accel,
+        dynamic_max_speed,
+        scene_id,
+    ) = scene
     env.all_goals = all_goals
     env.all_dsYddts = all_derivatives
     goal_indices = find_closest_goal_indices(
