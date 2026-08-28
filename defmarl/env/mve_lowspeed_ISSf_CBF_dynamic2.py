@@ -35,7 +35,7 @@ class MVELaneChangeAndOverTake_LowSpeed_ISSf_CBF_Dynamic2(MVELaneChangeAndOverTa
         "issf_epsilon_rate": 1.0,
         "issf_epsilon_min": 50.0,
         "issf_safe_barrier_kappa": 1.0,
-        "pre_static_penalty": 0.2,
+        "pre_static_penalty": 0.02,
         "deterministic_scene_train_probability": 0.02,
     })
 

@@ -16,10 +16,12 @@ from defmarl.utils.scaling_lowspeed import (
     rear_to_center,
     scaling_calc_parameterized,
 )
-from defmarl.utils.typing import Action, Array, Cost, Reward, State
+from defmarl.utils.typing import Action, Array, Cost, ObstState, Reward, State
 from defmarl.utils.utils import find_closest_goal_indices, gen_i_j_pairs
 
 from .designed_scene_gen_intersection_deterministic_WestEnter import (
+    DYNAMIC_ACCEL as DETERMINISTIC_DYNAMIC_ACCEL,
+    DYNAMIC_TARGET_SPEED as DETERMINISTIC_DYNAMIC_TARGET_SPEED,
     gen_deterministic_scene_WestEnter_with_id,
 )
 from .designed_scene_gen_intersection_split_dynamic_WestEnter import (
@@ -54,10 +56,10 @@ class MVEIntersection_LowSpeed_ISSf_CBF_Dynamic_WestEnter_NewScaling(
     PARAMS = MVEIntersection_LowSpeed_ISSf_CBF_Dynamic_NewScaling.PARAMS.copy()
     PARAMS.update(
         {
-            "gamma": 3.0,
-            "issf_epsilon_0": 1.0,
-            "issf_epsilon_rate": 1.0,
-            "issf_epsilon_min": 30.0,
+            "gamma": 10.0,
+            "issf_epsilon_0": 2.0,
+            "issf_epsilon_rate": 2.0,
+            "issf_epsilon_min": 10.0,
 
             # Match the straight-road environment: apply a small constant
             # penalty until ego has longitudinally passed the static vehicle.
@@ -176,6 +178,61 @@ class MVEIntersection_LowSpeed_ISSf_CBF_Dynamic_WestEnter_NewScaling(
             use_fixed_scene, make_fixed_scene, make_split_scene, operand=None
         )
         return _build_westenter_reset(self, scene)
+
+    @override
+    def obst_step_euler(
+        self,
+        obstacle_states: ObstState,
+        dynamic_accel: Array,
+        dynamic_target_speed: Array,
+    ) -> ObstState:
+        """Use unclipped speed control only for the fixed demonstration data."""
+        parent_next = super().obst_step_euler(
+            obstacle_states, dynamic_accel, dynamic_target_speed
+        )
+        is_deterministic = jnp.logical_and(
+            jnp.isclose(dynamic_accel, DETERMINISTIC_DYNAMIC_ACCEL),
+            jnp.isclose(
+                dynamic_target_speed, DETERMINISTIC_DYNAMIC_TARGET_SPEED
+            ),
+        )
+
+        def make_deterministic_next(_):
+            static_obstacle = obstacle_states[0]
+            dynamic_obstacle = obstacle_states[1]
+            heading = dynamic_obstacle[2:4] / jnp.maximum(
+                jnp.linalg.norm(dynamic_obstacle[2:4]), 1e-6
+            )
+            speed = dynamic_obstacle[4]
+            speed_error = dynamic_target_speed - speed
+            speed_step = jnp.sign(speed_error) * dynamic_accel * self.dt
+            speed_next = jnp.where(
+                jnp.abs(speed_error) <= jnp.abs(speed_step),
+                dynamic_target_speed,
+                speed + speed_step,
+            )
+            speed_mid = 0.5 * (speed + speed_next)
+            position_next = (
+                dynamic_obstacle[:2] + speed_mid * heading * self.dt
+            )
+            dynamic_obstacle_next = (
+                dynamic_obstacle.at[:2]
+                .set(position_next)
+                .at[2:4]
+                .set(heading)
+                .at[4]
+                .set(speed_next)
+            )
+            return jnp.stack(
+                [static_obstacle, dynamic_obstacle_next], axis=0
+            )
+
+        return jax.lax.cond(
+            is_deterministic,
+            make_deterministic_next,
+            lambda _: parent_next,
+            operand=None,
+        )
 
     @override
     def _issf_constraint(
@@ -394,7 +451,7 @@ class MVEIntersection_LowSpeed_ISSf_CBF_Dynamic_WestEnter_NewScaling(
         agent = self._observable(graph.env_states.agent)
         goal = self._observable(graph.env_states.goal)
         error = agent - goal
-        weight = jnp.diag(jnp.array([2.5e-6, 2.5e-6, 0, 0, 5e-6, 0]))
+        weight = jnp.diag(jnp.array([2.5e-6, 2.5e-6, 0, 0, 2.5e-5, 0]))
         reward = -jnp.sqrt(
             jnp.einsum("ai,ij,ja->a", error, weight, error.transpose())
         ).mean()

@@ -10,13 +10,13 @@ from defmarl.utils.typing import AgentState, Array, ObstState, PathRefs
 
 WEST_ROAD_IDX = 3
 EGO_MIN_SPEED = 1.0 / 3.6
-EGO_TARGET_SPEED = 20.0 / 3.6
-DYNAMIC_ACCEL = 0.6
-DYNAMIC_TARGET_SPEED = 10.0 / 3.6
-EGO_PROGRESS = -5.0
-STATIC_PROGRESS = 25.0
-# Ego and moving obstacle reach the center in about 11.15 s and 10.95 s.
-DYNAMIC_ENTRY_DISTANCE = 24.0
+EGO_TARGET_SPEED = 15.0 / 3.6
+DYNAMIC_ACCEL = 6.0
+DYNAMIC_TARGET_SPEED = 40.0 / 3.6
+EGO_PROGRESS = 10.0
+STATIC_PROGRESS = 35.0
+
+DYNAMIC_ENTRY_DISTANCE = 70.0
 
 
 def gen_deterministic_scene_WestEnter_with_id(
@@ -79,7 +79,10 @@ def gen_deterministic_scene_WestEnter_with_id(
         ego_lane_idx,
     )
 
-    dynamic_lane_idx = jnp.where(dynamic_road == 1, 1, 0)
+    # For east-entry traffic, lane 1 is the upper westbound lane.  For
+    # north-entry traffic, lane 1 maps to x=-AUX_LANE_WIDTH/2, namely the
+    # western of the two southbound lanes required by scenes 2 and 4.
+    dynamic_lane_idx = jnp.asarray(1, dtype=jnp.int32)
     dynamic_lane_offset = _geometry._lane_centers(dynamic_road)[
         dynamic_lane_idx
     ]

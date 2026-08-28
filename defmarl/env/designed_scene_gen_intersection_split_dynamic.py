@@ -36,7 +36,7 @@ AUX_LANE_CENTERS = jnp.array([-AUX_LANE_WIDTH / 2.0, AUX_LANE_WIDTH / 2.0], dtyp
 
 # Match the established two-lane low-speed generator.  This is the fixed target
 # speed stored in every point of one scene's ego reference trajectory.
-REFERENCE_SPEED_RANGE_KMH = (20.0, 40.0)
+REFERENCE_SPEED_RANGE_KMH = (10.0, 30.0)
 EGO_MIN_INITIAL_SPEED = 1.0 / 3.6
 EGO_WHEELBASE = 1.75
 DYNAMIC_INITIAL_SPEED_RANGE_KMH = (10.0, 40.0)
