@@ -63,7 +63,7 @@ class MVEIntersection_LowSpeed_ISSf_CBF_Dynamic_WestEnter_NewScaling(
 
             # Match the straight-road environment: apply a small constant
             # penalty until ego has longitudinally passed the static vehicle.
-            "pre_static_penalty": 0.02,
+            "pre_static_penalty": 0.00,
             # Adjacent Bezier lanes have slightly different curvature.  A
             # small margin prevents equal curve progress in the other lane
             # from being classified as already past because of projection
@@ -451,7 +451,7 @@ class MVEIntersection_LowSpeed_ISSf_CBF_Dynamic_WestEnter_NewScaling(
         agent = self._observable(graph.env_states.agent)
         goal = self._observable(graph.env_states.goal)
         error = agent - goal
-        weight = jnp.diag(jnp.array([2.5e-6, 2.5e-6, 0, 0, 2.5e-5, 0]))
+        weight = jnp.diag(jnp.array([1e-5, 1e-5, 0, 0, 1e-5, 0]))
         reward = -jnp.sqrt(
             jnp.einsum("ai,ij,ja->a", error, weight, error.transpose())
         ).mean()

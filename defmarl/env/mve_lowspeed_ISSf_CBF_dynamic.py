@@ -45,16 +45,16 @@ class MVELaneChangeAndOverTake_LowSpeed_ISSf_CBF_Dynamic(MVELaneChangeAndOverTak
         "obst_bb_size": jnp.array([4, 2]),
         "v_min": 1.0 / 3.6,
         "v_max": 30.0 / 3.6,
-        "gamma": 2.0,
-        "issf_epsilon_0": 1.0,
-        "issf_epsilon_rate": 1.0,
-        "issf_epsilon_min": 50.0,
+        "gamma": 10.0,
+        "issf_epsilon_0": 2.0,
+        "issf_epsilon_rate": 2.0,
+        "issf_epsilon_min": 10.0,
         # Compress only alpha > alpha_thresh before applying ISSf-CBF.  The
         # unsafe side and cost_real remain exactly geometric.
         "issf_safe_barrier_kappa": 1.0,
         # Applied until ego's center passes the static obstacle. Keep this
         # ISSf-specific so the ordinary dynamic CBF environment is unchanged.
-        "pre_static_penalty": 0.02,
+        "pre_static_penalty": 0.00,
         # Total probability of drawing one of the four fixed demonstration
         # scenes during training. Each fixed scene therefore has probability
         # 0.05 / 4 = 1.25%; all other resets retain the split distribution.
@@ -112,7 +112,7 @@ class MVELaneChangeAndOverTake_LowSpeed_ISSf_CBF_Dynamic(MVELaneChangeAndOverTak
         agent = self._observable(graph.env_states.agent)
         goal = self._observable(graph.env_states.goal)
         e = agent - goal
-        W = jnp.diag(jnp.array([2.5e-6, 2.5e-6, 0, 0, 5e-6, 0]))
+        W = jnp.diag(jnp.array([1e-5, 1e-5, 0, 0, 1e-5, 0]))
         reward = -jnp.sqrt(jnp.einsum("ai,ij,ja->a", e, W, e.transpose())).mean()
         # reward -= (action[:, 0] ** 2).mean() * 0.0001
         # reward -= (action[:, 1] ** 2).mean() * 0.0001
