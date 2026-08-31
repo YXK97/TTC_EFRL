@@ -13,18 +13,18 @@ from .designed_scene_gen_two_lane_split import (
 from defmarl.utils.typing import AgentState, Array, ObstState, PathRefs
 
 
-EGO_MIN_SPEED = 1.0 / 3.6
+EGO_MIN_SPEED = 5.0 / 3.6
 EGO_TARGET_SPEED = 15.0 / 3.6
 STATIC_X = 50.0
 EGO_X = 10.0
 LANE_CHANGE_START_X = 45.0
-LANE_CHANGE_END_X = 85.0
+LANE_CHANGE_END_X = 105.0
 
 FAST_ACCEL = 6.0
 FAST_SPEED = 40.0 / 3.6
 FAST_INITIAL_X = -12.0
 SLOW_ACCEL = 0.3
-SLOW_SPEED = 10.0 / 3.6
+SLOW_SPEED = 5.0 / 3.6
 SLOW_INITIAL_X = 26.0
 
 YIELD_RESUME = 5

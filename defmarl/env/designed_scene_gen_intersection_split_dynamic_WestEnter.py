@@ -44,8 +44,8 @@ WEST_PHASE_PROBS = jnp.array(
 )
 
 
-def _early_path_limit(maneuver: Array, path_total: Array) -> Array:
-    """End of the entrance plus the first third of the central path segment."""
+def _static_path_limit(maneuver: Array, path_total: Array) -> Array:
+    """End of the central segment plus the first third of the exit road."""
     approach_len = _base.ROAD_HALF - _base.TURN_HALF
     turn_curve_len = path_total - 2.0 * approach_len
     # A straight route crosses a 2*TURN_HALF-long central region.  Treating
@@ -55,7 +55,8 @@ def _early_path_limit(maneuver: Array, path_total: Array) -> Array:
         2.0 * _base.TURN_HALF,
         turn_curve_len,
     )
-    return approach_len + central_segment_len / 3.0
+    exit_first_third = approach_len / 3.0
+    return approach_len + central_segment_len + exit_first_third
 
 
 def _sample_west_path_positions(
@@ -70,13 +71,13 @@ def _sample_west_path_positions(
     remain implemented so callers can still force those phases for debugging.
     """
     static_key, gap_key = jr.split(key)
-    early_limit = _early_path_limit(maneuver, path_total)
+    static_limit = _static_path_limit(maneuver, path_total)
 
     def start_phase(_):
-        # START covers most of the western entrance and the first third of the
-        # central path.  Its larger gap initializes ego relatively early while
-        # retaining enough longitudinal clearance from the static vehicle.
-        static_s = jr.uniform(static_key, (), minval=15.0, maxval=early_limit)
+        # Preserve the established entrance-road lower bound and ego gap while
+        # allowing the static vehicle to extend through the complete central
+        # segment and into the first third of the exit road.
+        static_s = jr.uniform(static_key, (), minval=15.0, maxval=static_limit)
         max_gap = jnp.minimum(24.0, static_s)
         gap = jr.uniform(
             gap_key, (), minval=12.0, maxval=max_gap
@@ -88,14 +89,14 @@ def _sample_west_path_positions(
         # enter the adjacent lane before reaching the static vehicle.  Do not
         # cap the gap by static_s: negative ego progress is valid and places
         # ego west of the nominal x=-50 m initialization window.
-        static_s = jr.uniform(static_key, (), minval=10.0, maxval=early_limit)
+        static_s = jr.uniform(static_key, (), minval=10.0, maxval=static_limit)
         gap = jr.uniform(gap_key, (), minval=24.0, maxval=36.0)
         return static_s, static_s - gap
 
     def side_phase(_):
         # SIDE represents an in-progress bypass in the adjacent lane.  Ego is
         # never initialized beyond the static vehicle in path progress.
-        static_s = jr.uniform(static_key, (), minval=8.0, maxval=early_limit)
+        static_s = jr.uniform(static_key, (), minval=8.0, maxval=static_limit)
         relative_s = jr.uniform(gap_key, (), minval=-8.0, maxval=0.0)
         return static_s, static_s + relative_s
 

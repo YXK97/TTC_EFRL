@@ -512,8 +512,8 @@ def _make_dynamic_obstacle(
         arrival_offset_key,
         shape=(),
         dtype=jnp.float32,
-        minval=6.0,
-        maxval=8.0,
+        minval=8.0,
+        maxval=10.0,
     )
     dynamic_arrival_time = jnp.where(
         is_yield_resume,
