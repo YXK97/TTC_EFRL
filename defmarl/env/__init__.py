@@ -40,7 +40,6 @@ ENV = {
     'MVELaneChangeAndOverTake_LowSpeed_CBF_Dynamic2': MVELaneChangeAndOverTake_LowSpeed_CBF_Dynamic2,
     'MVELaneChangeAndOverTake_LowSpeed_ISSf_CBF': MVELaneChangeAndOverTake_LowSpeed_ISSf_CBF,
     'MVELaneChangeAndOverTake_LowSpeed_ISSf_CBF_Dynamic': MVELaneChangeAndOverTake_LowSpeed_ISSf_CBF_Dynamic,
-    'MVELaneChangeAndOverTake_LowSpeed_ISSf_CBF_Dynamic2': MVELaneChangeAndOverTake_LowSpeed_ISSf_CBF_Dynamic2,
     'MVELaneChangeAndOverTake_LowSpeed_ISSf_CBF2': MVELaneChangeAndOverTake_LowSpeed_ISSf_CBF2,
     'MVELaneChangeAndOverTake_RSH': MVELaneChangeAndOverTake_RSH,
     'MVELaneChangeAndOverTake_LowSpeed_Bound': MVELaneChangeAndOverTake_LowSpeed_Bound,

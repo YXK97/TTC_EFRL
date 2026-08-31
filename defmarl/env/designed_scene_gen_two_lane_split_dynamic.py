@@ -20,7 +20,7 @@ from defmarl.utils.typing import AgentState, Array, ObstState, PathRefs, PRNGKey
 DYNAMIC_OBST_ACCEL_RANGE = (0.1, 7.0)
 DYNAMIC_OBST_MAX_SPEED_RANGE_KMH = (10.0, 60.0)
 
-EGO_MIN_INITIAL_SPEED = 1.0 / 3.6
+EGO_MIN_INITIAL_SPEED = 5.0 / 3.6
 EGO_MAX_SPEED = 30.0 / 3.6
 EGO_REFERENCE_SPEED_RANGE_KMH = (10.0, 30.0)
 _EGO_NOMINAL_ACCEL = 2.0
@@ -30,7 +30,7 @@ _INITIAL_X_SOFT_MARGIN = 10.0
 # Phase probabilities, summing over the two reference types:
 # START APPROACH SIDE PASSED DONE YIELD_RESUME EGO_FIRST
 _SCENE_PROBS = jnp.array(
-    [0.075, 0.125, 0.075, 0, 0, 0.125, 0.1] * 2
+    [0.075, 0.125, 0.125, 0, 0, 0.1, 0.075] * 2
 )
 
 _START = 0

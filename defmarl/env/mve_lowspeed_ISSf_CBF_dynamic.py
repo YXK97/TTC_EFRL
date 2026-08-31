@@ -43,7 +43,7 @@ class MVELaneChangeAndOverTake_LowSpeed_ISSf_CBF_Dynamic(MVELaneChangeAndOverTak
     PARAMS = MVELaneChangeAndOverTake_LowSpeed_CBF_Dynamic.PARAMS.copy()
     PARAMS.update({
         "obst_bb_size": jnp.array([4, 2]),
-        "v_min": 1.0 / 3.6,
+        "v_min": 5.0 / 3.6,
         "v_max": 30.0 / 3.6,
         "gamma": 10.0,
         "issf_epsilon_0": 2.0,
@@ -58,7 +58,7 @@ class MVELaneChangeAndOverTake_LowSpeed_ISSf_CBF_Dynamic(MVELaneChangeAndOverTak
         # Total probability of drawing one of the four fixed demonstration
         # scenes during training. Each fixed scene therefore has probability
         # 0.05 / 4 = 1.25%; all other resets retain the split distribution.
-        "deterministic_scene_train_probability": 0.02,
+        "deterministic_scene_train_probability": 0.05,
     })
 
     _SCENE_PHASE_NAMES = (
@@ -112,7 +112,7 @@ class MVELaneChangeAndOverTake_LowSpeed_ISSf_CBF_Dynamic(MVELaneChangeAndOverTak
         agent = self._observable(graph.env_states.agent)
         goal = self._observable(graph.env_states.goal)
         e = agent - goal
-        W = jnp.diag(jnp.array([1e-5, 1e-5, 0, 0, 1e-5, 0]))
+        W = jnp.diag(jnp.array([2e-5, 2e-5, 0, 0, 1e-4, 0]))
         reward = -jnp.sqrt(jnp.einsum("ai,ij,ja->a", e, W, e.transpose())).mean()
         # reward -= (action[:, 0] ** 2).mean() * 0.0001
         # reward -= (action[:, 1] ** 2).mean() * 0.0001
@@ -290,7 +290,7 @@ def _get_safe_compressed_cost(env, graph, action):
         young_penalty = jnp.square(steering_dot) / epsilon(barrier)
         residual = barrier_dot / gamma + barrier - young_penalty / gamma
         cost = jnp.nan_to_num(
-            -residual, nan=10.0, posinf=10.0, neginf=-3.0
+            -residual, nan=3.0, posinf=3.0, neginf=-3.0
         )
         return cost, 1.0 - alpha
 
@@ -356,4 +356,4 @@ def _get_safe_compressed_cost(env, graph, action):
         [agent_cost_real, obstacle_cost_real, lower_real, upper_real], axis=1
     )
     cost = jnp.where(cost <= 0.0, cost, cost + 1.0)
-    return jnp.clip(cost, a_min=-10.0, a_max=10.0), cost_real
+    return jnp.clip(cost, a_min=-3.0, a_max=3.0), cost_real
