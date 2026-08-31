@@ -69,7 +69,7 @@ class MVEIntersection_LowSpeed_ISSf_CBF_Dynamic_WestEnter_NewScaling(
             # from being classified as already past because of projection
             # error (measured worst case below 0.15 m for this geometry).
             "static_pass_margin": 0.25,
-            "v_min": 1.0 / 3.6,
+            "v_min": 5.0 / 3.6,
             "v_max": 30.0 / 3.6,
             # Keep alpha and its hard minimum unchanged.  Only the safe side
             # of h=alpha-alpha_thresh is compressed before ISSf evaluation.
@@ -451,7 +451,7 @@ class MVEIntersection_LowSpeed_ISSf_CBF_Dynamic_WestEnter_NewScaling(
         agent = self._observable(graph.env_states.agent)
         goal = self._observable(graph.env_states.goal)
         error = agent - goal
-        weight = jnp.diag(jnp.array([1e-5, 1e-5, 0, 0, 1e-5, 0]))
+        weight = jnp.diag(jnp.array([1e-5, 1e-5, 0, 0, 5e-5, 0]))
         reward = -jnp.sqrt(
             jnp.einsum("ai,ij,ja->a", error, weight, error.transpose())
         ).mean()

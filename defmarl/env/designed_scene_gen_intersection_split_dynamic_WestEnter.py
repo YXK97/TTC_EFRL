@@ -25,7 +25,14 @@ from . import designed_scene_gen_intersection_split_dynamic as _base
 # 0 south, 1 east, 2 north, 3 west.
 WEST_ROAD_IDX = 3
 WEST_MANEUVER_PROBS = jnp.array([1.0 / 3.0] * 3, dtype=jnp.float32)
-EGO_MIN_SPEED = 1.0 / 3.6
+# Ego always enters from the west.  Exclude SAME_DIRECTION because that would
+# also place the dynamic vehicle on the west road.  OPPOSITE_DIRECTION selects
+# the east road, while PERPENDICULAR is split evenly between south and north;
+# the resulting road probabilities are east/south/north = 1/3 each.
+WEST_DYNAMIC_RELATION_PROBS = jnp.array(
+    [0.0, 1.0 / 3.0, 2.0 / 3.0], dtype=jnp.float32
+)
+EGO_MIN_SPEED = 5.0 / 3.6
 EGO_MAX_SPEED = 30.0 / 3.6
 EGO_REFERENCE_SPEED_RANGE_KMH = (10.0, 30.0)
 
@@ -33,7 +40,7 @@ EGO_REFERENCE_SPEED_RANGE_KMH = (10.0, 30.0)
 # the former START/APPROACH/SIDE weights (0.20/0.35/0.20) preserves their
 # relative frequency while assigning exactly zero mass to the last two phases.
 WEST_PHASE_PROBS = jnp.array(
-    [0.2, 0.5, 0.3, 0.0, 0.0], dtype=jnp.float32
+    [0.2, 0.4, 0.4, 0.0, 0.0], dtype=jnp.float32
 )
 
 
@@ -399,7 +406,7 @@ class IntersectionSplitDynamicWestEnterScene(_base.IntersectionSplitDynamicScene
             p=WEST_MANEUVER_PROBS,
         )
         sampled_relation = jr.choice(
-            relation_key, 3, p=_base.DYNAMIC_RELATION_PROBS
+            relation_key, 3, p=WEST_DYNAMIC_RELATION_PROBS
         )
         phase = (
             sampled_phase
