@@ -78,7 +78,7 @@ class MVEIntersection_LowSpeed_ISSf_CBF_Dynamic_WestEnter_NewScaling(
             # scenes during training.  Each fixed scene therefore has
             # probability 0.02 / 4 = 0.5%; all other resets retain the split
             # scene distribution.
-            "deterministic_scene_train_probability": 0.02,
+            "deterministic_scene_train_probability": 0.05,
         }
     )
 
@@ -451,7 +451,7 @@ class MVEIntersection_LowSpeed_ISSf_CBF_Dynamic_WestEnter_NewScaling(
         agent = self._observable(graph.env_states.agent)
         goal = self._observable(graph.env_states.goal)
         error = agent - goal
-        weight = jnp.diag(jnp.array([1e-5, 1e-5, 0, 0, 5e-5, 0]))
+        weight = jnp.diag(jnp.array([2e-5, 2e-5, 0, 0, 1e-4, 0]))
         reward = -jnp.sqrt(
             jnp.einsum("ai,ij,ja->a", error, weight, error.transpose())
         ).mean()
