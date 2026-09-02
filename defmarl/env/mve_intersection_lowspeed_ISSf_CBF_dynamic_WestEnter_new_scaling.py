@@ -73,7 +73,7 @@ class MVEIntersection_LowSpeed_ISSf_CBF_Dynamic_WestEnter_NewScaling(
             "v_max": 30.0 / 3.6,
             # Keep alpha and its hard minimum unchanged.  Only the safe side
             # of h=alpha-alpha_thresh is compressed before ISSf evaluation.
-            "issf_safe_barrier_kappa": 1.0,
+            "issf_safe_barrier_kappa": 0.4,
             # Total probability of drawing one of the four fixed WestEnter
             # scenes during training.  Each fixed scene therefore has
             # probability 0.02 / 4 = 0.5%; all other resets retain the split
@@ -432,7 +432,7 @@ class MVEIntersection_LowSpeed_ISSf_CBF_Dynamic_WestEnter_NewScaling(
             [agent_cost_real, obstacle_cost_real, boundary_real], axis=1
         )
         cost = jnp.where(cost <= 0.0, cost, cost + 1.0)
-        return jnp.clip(cost, a_min=-10.0, a_max=10.0), cost_real
+        return jnp.clip(cost, a_min=-3.0, a_max=3.0), cost_real
 
     @override
     def _generate_scene(self, key: Array):
