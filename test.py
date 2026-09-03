@@ -159,6 +159,11 @@ def test(args):
         if args.output_csv:
             T_graph = rollout.graph
             T = T_graph.states.shape[0]
+            # Preview-goal environments expose two GOAL nodes per ego.  Keep
+            # the historical one-goal behavior for every existing environment.
+            num_graph_goals = getattr(
+                env, "num_graph_goals", env.num_agents
+            )
             agent_states = []
             goal_states = []
             obst_states = []
@@ -166,7 +171,11 @@ def test(args):
             for t in range(T):
                 graph_t = jax.tree_util.tree_map(lambda x: x[t], T_graph)
                 agent_states.append(graph_t.type_states(type_idx=MVE.AGENT, n_type=env.num_agents))
-                goal_states.append(graph_t.type_states(type_idx=MVE.GOAL, n_type=env.num_agents))
+                goal_states.append(
+                    graph_t.type_states(
+                        type_idx=MVE.GOAL, n_type=num_graph_goals
+                    )
+                )
                 obst_states.append(graph_t.type_states(type_idx=MVE.OBST, n_type=env.num_obsts))
 
             agent_states = jnp.stack(agent_states)
@@ -179,7 +188,15 @@ def test(args):
             def save_entity_csv(states, entity_name, entity_id):
                 csv_path = os.path.join(state_dir, f"{stamp_str}_epi{i_epi:02d}_{entity_name}{entity_id:02d}_states.csv")
                 state_dim = states.shape[-1]
-                state_cols = [f"s{i}" for i in range(state_dim)]
+                # Low-speed environments expose semantic state labels shared
+                # by ego, goals, and obstacles.  Keep a generic fallback for
+                # environments with a different or unspecified state layout.
+                semantic_labels = tuple(getattr(env, "state_labels", ()))
+                state_cols = (
+                    list(semantic_labels)
+                    if len(semantic_labels) == state_dim
+                    else [f"s{i}" for i in range(state_dim)]
+                )
                 with open(csv_path, "w") as f:
                     f.write(",".join(["time_step"] + state_cols) + "\n")
                     for t in range(states.shape[0]):

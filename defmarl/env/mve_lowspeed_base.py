@@ -42,6 +42,18 @@ class LowSpeedAccelMixin(MVE):
         return 6
 
     @property
+    def state_labels(self) -> Tuple[str, ...]:
+        """Semantic CSV labels for the shared low-speed vehicle state."""
+        return (
+            "x",
+            "y",
+            "heading_x",
+            "heading_y",
+            "speed",
+            "steering",
+        )
+
+    @property
     def node_dim(self) -> int:
         return self.state_dim + 3
 
@@ -402,9 +414,18 @@ class LowSpeedAccelMixin(MVE):
         agent_arrows, agent_rects = self._plot_pose(ax, graph0.env_states.agent, self.params["ego_bb_size"], self.params["ego_lr"], "#0068ff", 6)
         obst_arrows, obst_rects = self._plot_pose(ax, graph0.env_states.obstacle, self.params["obst_bb_size"], self.params["obst_lr"], "#8a0000", 5) if self.num_obsts > 0 else ([], [])
         ref_goals = np.asarray(rollout.graph.env_states.goal[:, :, :2])
+        goals_per_agent = getattr(self, "goals_per_agent", 1)
+        trajectory_goals = (
+            ref_goals[:, :self.num_agents]
+            if goals_per_agent == 2
+            else ref_goals
+        )
+        # The closest-goal history reconstructs the reference trajectory cloud.
+        # The current tracking/preview endpoints are not highlighted; both are
+        # visible only through their live goal edges.
         ax.scatter(
-            ref_goals[:, :, 0].reshape(-1),
-            ref_goals[:, :, 1].reshape(-1),
+            trajectory_goals[:, :, 0].reshape(-1),
+            trajectory_goals[:, :, 1].reshape(-1),
             color="#2fdd00",
             zorder=7,
             s=5,

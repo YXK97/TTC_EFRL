@@ -913,9 +913,18 @@ class MVEIntersection_LowSpeed_ISSf_CBF_Dynamic(
         # ego recorded during rollout.  No trajectory regeneration, interpolation,
         # or tangent extension is performed here.
         recorded_goals = np.asarray(trajectory.env_states.goal[:, :, :2])
+        goals_per_agent = getattr(self, "goals_per_agent", 1)
+        trajectory_goals = (
+            recorded_goals[:, :self.num_agents]
+            if goals_per_agent == 2
+            else recorded_goals
+        )
+        # Use the closest-goal history as the reference trajectory cloud.  The
+        # current tracking/preview endpoints have no separate markers or colors;
+        # their two graph edges remain visible at every frame.
         ax.scatter(
-            recorded_goals[:, :, 0].reshape(-1),
-            recorded_goals[:, :, 1].reshape(-1),
+            trajectory_goals[:, :, 0].reshape(-1),
+            trajectory_goals[:, :, 1].reshape(-1),
             color="#2fdd00",
             zorder=7,
             s=5,

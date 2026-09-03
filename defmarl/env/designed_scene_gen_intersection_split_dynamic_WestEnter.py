@@ -32,6 +32,12 @@ WEST_MANEUVER_PROBS = jnp.array([1.0 / 3.0] * 3, dtype=jnp.float32)
 WEST_DYNAMIC_RELATION_PROBS = jnp.array(
     [0.0, 1.0 / 3.0, 2.0 / 3.0], dtype=jnp.float32
 )
+# Only part of the random curriculum should create an exact arrival-time
+# conflict.  The remaining scenes retain interacting traffic, but move its
+# center-arrival time far enough ahead of or behind ego to provide easier
+# negotiation examples as well.
+DYNAMIC_EXACT_ARRIVAL_PROBABILITY = 0.5
+DYNAMIC_NON_EXACT_TIME_GAP_RANGE = (3.0, 6.0)
 EGO_MIN_SPEED = 5.0 / 3.6
 EGO_MAX_SPEED = 30.0 / 3.6
 EGO_REFERENCE_SPEED_RANGE_KMH = (10.0, 30.0)
@@ -148,14 +154,17 @@ def _make_timed_dynamic_obstacle(
     static_obstacle: ObstState,
     ego_arrival_time: Array,
 ) -> Tuple[ObstState, Array, Array]:
-    """Time dynamic traffic to reach the intersection center with ego."""
+    """Place dynamic traffic using a mixture of exact and offset arrivals."""
     (
         perpendicular_key,
         lane_key,
         initial_speed_key,
         target_speed_key,
         accel_key,
-    ) = jr.split(key, 5)
+        exact_arrival_key,
+        arrival_side_key,
+        arrival_gap_key,
+    ) = jr.split(key, 8)
     perpendicular_side = jr.choice(
         perpendicular_key, jnp.array([-1, 1], dtype=jnp.int32)
     )
@@ -197,8 +206,34 @@ def _make_timed_dynamic_obstacle(
         maxval=_base.DYNAMIC_ACCEL_MAGNITUDE_RANGE[1],
     )
 
+    # Exact-conflict samples preserve the original curriculum.  Other samples
+    # arrive 3-6 seconds before or after ego.  An early arrival is used only
+    # when it still leaves at least one second of obstacle travel; otherwise it
+    # is converted to a late arrival instead of being clipped back toward an
+    # accidental near-synchronous conflict.
+    exact_arrival = jr.bernoulli(
+        exact_arrival_key, p=DYNAMIC_EXACT_ARRIVAL_PROBABILITY
+    )
+    prefer_early = jr.bernoulli(arrival_side_key, p=0.5)
+    arrival_gap = jr.uniform(
+        arrival_gap_key,
+        (),
+        minval=DYNAMIC_NON_EXACT_TIME_GAP_RANGE[0],
+        maxval=DYNAMIC_NON_EXACT_TIME_GAP_RANGE[1],
+    )
+    can_arrive_early = ego_arrival_time - arrival_gap >= 1.0
+    use_early = jnp.logical_and(prefer_early, can_arrive_early)
+    offset_arrival_time = jnp.where(
+        use_early,
+        ego_arrival_time - arrival_gap,
+        ego_arrival_time + arrival_gap,
+    )
+    obstacle_arrival_time = jnp.where(
+        exact_arrival, ego_arrival_time, offset_arrival_time
+    )
+
     travel_distance = _distance_under_speed_controller(
-        initial_speed, target_speed, accel_magnitude, ego_arrival_time
+        initial_speed, target_speed, accel_magnitude, obstacle_arrival_time
     )
     # Roads are unbounded beyond the nominal +/-50 m initialization window.
     # Do not clip here: a fast obstacle paired with a distant START ego may

@@ -20,3 +20,6 @@ UFTSTC/videos/
 UFTSTC/csv/
 UFTSTC_intersection/videos/
 UFTSTC_intersection/csv/
+
+#video rendering related
+scripts/video*/
