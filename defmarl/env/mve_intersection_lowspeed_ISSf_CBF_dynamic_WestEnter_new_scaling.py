@@ -451,7 +451,7 @@ class MVEIntersection_LowSpeed_ISSf_CBF_Dynamic_WestEnter_NewScaling(
         agent = self._observable(graph.env_states.agent)
         goal = self._observable(graph.env_states.goal)
         error = agent - goal
-        weight = jnp.diag(jnp.array([2e-5, 2e-5, 0, 0, 1e-4, 0]))
+        weight = jnp.diag(jnp.array([3e-5, 3e-5, 0, 0, 3e-5, 0]))
         reward = -jnp.sqrt(
             jnp.einsum("ai,ij,ja->a", error, weight, error.transpose())
         ).mean()

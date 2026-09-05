@@ -14,6 +14,9 @@ from defmarl.env.mve_lowspeed_ISSf_CBF_dynamic import MVELaneChangeAndOverTake_L
 from defmarl.env.mve_lowspeed_ISSf_CBF_dynamic_preview import (
     MVELaneChangeAndOverTake_LowSpeed_ISSf_CBF_Dynamic_Preview,
 )
+from defmarl.env.mve_lowspeed_ISSf_CBF_dynamic_preview_relative_motion import (
+    MVELaneChangeAndOverTake_LowSpeed_ISSf_CBF_Dynamic_Preview_RelativeMotion,
+)
 from defmarl.env.mve_lowspeed_ISSf_CBF2 import MVELaneChangeAndOverTake_LowSpeed_ISSf_CBF2
 from defmarl.env.mve_lanechange_rsh import MVELaneChangeAndOverTake_RSH
 from defmarl.env.mve_lowspeed_bound import MVELaneChangeAndOverTake_LowSpeed_Bound
@@ -33,6 +36,9 @@ from defmarl.env.mve_intersection_lowspeed_ISSf_CBF_dynamic_WestEnter_new_scalin
 from defmarl.env.mve_intersection_lowspeed_ISSf_CBF_dynamic_WestEnter_new_scaling_preview import (
     MVEIntersection_LowSpeed_ISSf_CBF_Dynamic_WestEnter_NewScaling_Preview,
 )
+from defmarl.env.mve_intersection_lowspeed_ISSf_CBF_dynamic_WestEnter_new_scaling_preview_relative_motion import (
+    MVEIntersection_LowSpeed_ISSf_CBF_Dynamic_WestEnter_NewScaling_Preview_RelativeMotion,
+)
 
 ENV = {
     'MVELaneChange': MVELaneChangeAndOverTake,
@@ -46,6 +52,7 @@ ENV = {
     'MVELaneChangeAndOverTake_LowSpeed_ISSf_CBF': MVELaneChangeAndOverTake_LowSpeed_ISSf_CBF,
     'MVELaneChangeAndOverTake_LowSpeed_ISSf_CBF_Dynamic': MVELaneChangeAndOverTake_LowSpeed_ISSf_CBF_Dynamic,
     'MVELaneChangeAndOverTake_LowSpeed_ISSf_CBF_Dynamic_Preview': MVELaneChangeAndOverTake_LowSpeed_ISSf_CBF_Dynamic_Preview,
+    'MVELaneChangeAndOverTake_LowSpeed_ISSf_CBF_Dynamic_Preview_RelativeMotion': MVELaneChangeAndOverTake_LowSpeed_ISSf_CBF_Dynamic_Preview_RelativeMotion,
     'MVELaneChangeAndOverTake_LowSpeed_ISSf_CBF2': MVELaneChangeAndOverTake_LowSpeed_ISSf_CBF2,
     'MVELaneChangeAndOverTake_RSH': MVELaneChangeAndOverTake_RSH,
     'MVELaneChangeAndOverTake_LowSpeed_Bound': MVELaneChangeAndOverTake_LowSpeed_Bound,
@@ -55,6 +62,7 @@ ENV = {
     'MVEIntersection_LowSpeed_ISSf_CBF_Dynamic_NewScaling': MVEIntersection_LowSpeed_ISSf_CBF_Dynamic_NewScaling,
     'MVEIntersection_LowSpeed_ISSf_CBF_Dynamic_WestEnter_NewScaling': MVEIntersection_LowSpeed_ISSf_CBF_Dynamic_WestEnter_NewScaling,
     'MVEIntersection_LowSpeed_ISSf_CBF_Dynamic_WestEnter_NewScaling_Preview': MVEIntersection_LowSpeed_ISSf_CBF_Dynamic_WestEnter_NewScaling_Preview,
+    'MVEIntersection_LowSpeed_ISSf_CBF_Dynamic_WestEnter_NewScaling_Preview_RelativeMotion': MVEIntersection_LowSpeed_ISSf_CBF_Dynamic_WestEnter_NewScaling_Preview_RelativeMotion,
 }
 
 

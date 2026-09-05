@@ -38,6 +38,11 @@ WEST_DYNAMIC_RELATION_PROBS = jnp.array(
 # negotiation examples as well.
 DYNAMIC_EXACT_ARRIVAL_PROBABILITY = 0.5
 DYNAMIC_NON_EXACT_TIME_GAP_RANGE = (3.0, 6.0)
+# When ego is already bypassing a static vehicle inside the turn, do not stack
+# an exact dynamic-traffic conflict on top of that maneuver.  A later arrival
+# and an explicit distance floor keep these compound scenes useful but easier.
+DYNAMIC_TURN_OVERLAP_TIME_GAP_RANGE = (6.0, 10.0)
+DYNAMIC_TURN_OVERLAP_MIN_DISTANCE_RANGE = (30.0, 45.0)
 EGO_MIN_SPEED = 5.0 / 3.6
 EGO_MAX_SPEED = 30.0 / 3.6
 EGO_REFERENCE_SPEED_RANGE_KMH = (10.0, 30.0)
@@ -153,6 +158,8 @@ def _make_timed_dynamic_obstacle(
     agents: AgentState,
     static_obstacle: ObstState,
     ego_arrival_time: Array,
+    ego_lane_idx: Array,
+    ego_and_static_in_turn: Array,
 ) -> Tuple[ObstState, Array, Array]:
     """Place dynamic traffic using a mixture of exact and offset arrivals."""
     (
@@ -164,7 +171,8 @@ def _make_timed_dynamic_obstacle(
         exact_arrival_key,
         arrival_side_key,
         arrival_gap_key,
-    ) = jr.split(key, 8)
+        turn_distance_key,
+    ) = jr.split(key, 9)
     perpendicular_side = jr.choice(
         perpendicular_key, jnp.array([-1, 1], dtype=jnp.int32)
     )
@@ -178,7 +186,14 @@ def _make_timed_dynamic_obstacle(
         ),
     )
     obstacle_direction = _base.ROAD_DIRS[obstacle_road]
-    obstacle_lane_idx = jr.randint(lane_key, (), minval=0, maxval=2)
+    random_obstacle_lane_idx = jr.randint(lane_key, (), minval=0, maxval=2)
+    # East-entering traffic travels opposite to ego on the east-west main road.
+    # Because the two road directions have opposite right normals, equal numeric
+    # lane indices denote different physical lanes.  Selecting ego_lane_idx here
+    # therefore prevents an east vehicle from meeting ego head-on on its route.
+    obstacle_lane_idx = jnp.where(
+        obstacle_road == 1, ego_lane_idx, random_obstacle_lane_idx
+    )
     obstacle_lane_offset = _base._lane_centers(obstacle_road)[obstacle_lane_idx]
 
     random_initial_speed = jr.uniform(
@@ -211,18 +226,34 @@ def _make_timed_dynamic_obstacle(
     # when it still leaves at least one second of obstacle travel; otherwise it
     # is converted to a late arrival instead of being clipped back toward an
     # accidental near-synchronous conflict.
-    exact_arrival = jr.bernoulli(
+    sampled_exact_arrival = jr.bernoulli(
         exact_arrival_key, p=DYNAMIC_EXACT_ARRIVAL_PROBABILITY
     )
+    exact_arrival = jnp.logical_and(
+        sampled_exact_arrival, jnp.logical_not(ego_and_static_in_turn)
+    )
     prefer_early = jr.bernoulli(arrival_side_key, p=0.5)
-    arrival_gap = jr.uniform(
+    normal_arrival_gap = jr.uniform(
         arrival_gap_key,
         (),
         minval=DYNAMIC_NON_EXACT_TIME_GAP_RANGE[0],
         maxval=DYNAMIC_NON_EXACT_TIME_GAP_RANGE[1],
     )
+    turn_arrival_gap = jr.uniform(
+        arrival_gap_key,
+        (),
+        minval=DYNAMIC_TURN_OVERLAP_TIME_GAP_RANGE[0],
+        maxval=DYNAMIC_TURN_OVERLAP_TIME_GAP_RANGE[1],
+    )
+    arrival_gap = jnp.where(
+        ego_and_static_in_turn, turn_arrival_gap, normal_arrival_gap
+    )
     can_arrive_early = ego_arrival_time - arrival_gap >= 1.0
-    use_early = jnp.logical_and(prefer_early, can_arrive_early)
+    # In the compound turn case always make the dynamic vehicle arrive later.
+    use_early = jnp.logical_and(
+        jnp.logical_and(prefer_early, can_arrive_early),
+        jnp.logical_not(ego_and_static_in_turn),
+    )
     offset_arrival_time = jnp.where(
         use_early,
         ego_arrival_time - arrival_gap,
@@ -234,6 +265,17 @@ def _make_timed_dynamic_obstacle(
 
     travel_distance = _distance_under_speed_controller(
         initial_speed, target_speed, accel_magnitude, obstacle_arrival_time
+    )
+    turn_minimum_distance = jr.uniform(
+        turn_distance_key,
+        (),
+        minval=DYNAMIC_TURN_OVERLAP_MIN_DISTANCE_RANGE[0],
+        maxval=DYNAMIC_TURN_OVERLAP_MIN_DISTANCE_RANGE[1],
+    )
+    travel_distance = jnp.where(
+        ego_and_static_in_turn,
+        jnp.maximum(travel_distance, turn_minimum_distance),
+        travel_distance,
     )
     # Roads are unbounded beyond the nominal +/-50 m initialization window.
     # Do not clip here: a fast obstacle paired with a distant START ego may
@@ -359,6 +401,15 @@ def _make_west_scene(
     ego_arrival_time = jnp.clip(
         (conflict_s - ego_s) / estimated_ego_speed, 1.0, 12.0
     )
+    turn_start_s = approach_len
+    turn_end_s = approach_len + curve_len
+    static_in_turn = jnp.logical_and(
+        static_s >= turn_start_s, static_s <= turn_end_s
+    )
+    ego_in_turn = jnp.logical_and(
+        ego_s >= turn_start_s, ego_s <= turn_end_s
+    )
+    ego_and_static_in_turn = jnp.logical_and(static_in_turn, ego_in_turn)
     dynamic_obstacle, dynamic_accel, dynamic_target_speed = (
         _make_timed_dynamic_obstacle(
             dynamic_key,
@@ -368,6 +419,8 @@ def _make_west_scene(
             agents,
             static_obstacle,
             ego_arrival_time,
+            lane_idx,
+            ego_and_static_in_turn,
         )
     )
     obstacles = jnp.stack([static_obstacle, dynamic_obstacle], axis=0)
