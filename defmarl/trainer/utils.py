@@ -317,6 +317,27 @@ def compute_norm(grad):
     return jnp.sqrt(sum(jnp.sum(jnp.square(x)) for x in jtu.tree_leaves(grad)))
 
 
+def compute_rms(tree):
+    """Root-mean-square magnitude over every scalar in a pytree."""
+    leaves = jtu.tree_leaves(tree)
+    total_size = sum(leaf.size for leaf in leaves)
+    return jnp.sqrt(
+        sum(jnp.sum(jnp.square(leaf)) for leaf in leaves)
+        / jnp.maximum(total_size, 1)
+    )
+
+
+def target_rms(target):
+    """RMS scale used to interpret a critic regression target."""
+    return jnp.sqrt(jnp.mean(jnp.square(target)))
+
+
+def normalized_l2_loss(loss, target, epsilon: float = 1e-6):
+    """Normalize Optax's half-MSE by the target's mean-square magnitude."""
+    target_mean_square = jnp.mean(jnp.square(target))
+    return (2.0 * loss) / (target_mean_square + epsilon)
+
+
 def compute_norm_and_clip(grad, max_norm: float):
     g_norm = compute_norm(grad)
     clipped_g_norm = jnp.maximum(max_norm, g_norm)

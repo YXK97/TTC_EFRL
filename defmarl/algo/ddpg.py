@@ -21,7 +21,11 @@ from ..nn.mlp import MLP
 from ..nn.utils import default_nn_init, get_default_tx
 from ..trainer.data import Rollout
 from ..trainer.utils import rollout as rollout_fn
-from ..trainer.utils import has_any_nan_or_inf, compute_norm_and_clip
+from ..trainer.utils import (
+    compute_norm_and_clip,
+    compute_rms,
+    has_any_nan_or_inf,
+)
 from ..utils.graph import GraphsTuple
 from ..utils.typing import Action, Array, Params, PRNGKey
 
@@ -167,6 +171,7 @@ class DDPG(Algorithm):
     """
 
     use_ef: bool = False
+    SAFETY_CRITIC_LOSS_KEY: str = "critic/loss_safety"
 
     def __init__(
             self,
@@ -201,6 +206,7 @@ class DDPG(Algorithm):
             replay_warmup_transitions: int = 8192,
             updates_per_iter: int = 1,
             iter_index: int = 0,
+            Vh_gnn_layers: int = 1,
             **kwargs
     ):
         del state_dim, kwargs
@@ -209,6 +215,7 @@ class DDPG(Algorithm):
         self.cost_weight = cost_weight
         self.actor_gnn_layers = actor_gnn_layers
         self.critic_gnn_layers = critic_gnn_layers
+        self.Vh_gnn_layers = Vh_gnn_layers
         self.gamma = gamma
         self.max_grad_norm = max_grad_norm
         self.seed = seed
@@ -235,7 +242,9 @@ class DDPG(Algorithm):
 
         self.actor = DeterministicActor(action_dim, n_agents, actor_gnn_layers, use_ef=self.use_ef)
         self.critic = GraphQNet(n_agents, 1, critic_gnn_layers, use_ef=self.use_ef)
-        self.safety_critic = GraphQNet(n_agents, env.n_cost, critic_gnn_layers, use_ef=self.use_ef)
+        self.safety_critic = GraphQNet(
+            n_agents, env.n_cost, self.Vh_gnn_layers, use_ef=self.use_ef
+        )
 
         n_nodes = n_agents
         self.nominal_graph = GraphsTuple(
@@ -300,6 +309,7 @@ class DDPG(Algorithm):
             "cost_weight": self.cost_weight,
             "actor_gnn_layers": self.actor_gnn_layers,
             "critic_gnn_layers": self.critic_gnn_layers,
+            "Vh_gnn_layers": self.Vh_gnn_layers,
             "gamma": self.gamma,
             "batch_size": self.batch_size,
             "tau": self.tau,
@@ -466,11 +476,34 @@ class DDPG(Algorithm):
             #   L_Qc = mean((Qc - y_c)^2)
             loss_q = optax.l2_loss(q_pred, q_target).mean()
             loss_safety = optax.l2_loss(safety_pred, safety_target).mean()
+            loss_q_mean = jax.lax.pmean(loss_q, axis_name="n_gpu")
+            loss_safety_mean = jax.lax.pmean(
+                loss_safety, axis_name="n_gpu"
+            )
+            target_q_mean_square = jax.lax.pmean(
+                jnp.mean(jnp.square(q_target)), axis_name="n_gpu"
+            )
+            target_safety_mean_square = jax.lax.pmean(
+                jnp.mean(jnp.square(safety_target)), axis_name="n_gpu"
+            )
             info = {
-                "critic/loss": jax.lax.pmean(loss_q, axis_name="n_gpu"),
-                "critic/loss_safety": jax.lax.pmean(loss_safety, axis_name="n_gpu"),
+                "critic/loss": loss_q_mean,
+                self.SAFETY_CRITIC_LOSS_KEY: loss_safety_mean,
                 "critic/target_q": jax.lax.pmean(q_target.mean(), axis_name="n_gpu"),
                 "critic/target_safety": jax.lax.pmean(safety_target.mean(), axis_name="n_gpu"),
+                "normalized/critic_loss": (
+                    2.0 * loss_q_mean / (target_q_mean_square + 1e-6)
+                ),
+                "normalized/critic_loss_Vh": (
+                    2.0 * loss_safety_mean
+                    / (target_safety_mean_square + 1e-6)
+                ),
+                "normalized/critic_target_rms": jnp.sqrt(
+                    target_q_mean_square
+                ),
+                "normalized/critic_target_rms_Vh": jnp.sqrt(
+                    target_safety_mean_square
+                ),
             }
             return loss_q + loss_safety, info
 
@@ -520,12 +553,20 @@ class DDPG(Algorithm):
 
         grad, (safety_q, info) = jax.grad(actor_loss_fn, has_aux=True)(actor_state.params)
         grad_has_nan = jax.lax.pmax(has_any_nan_or_inf(grad).astype(jnp.float32), axis_name="n_gpu")
+        grad_rms = compute_rms(grad)
         grad, grad_norm = compute_norm_and_clip(grad, self.max_grad_norm)
         actor_state = actor_state.apply_gradients(grads=grad)
 
         info.update({
             "policy/has_nan": grad_has_nan,
             "policy/grad_norm": jax.lax.pmean(grad_norm, axis_name="n_gpu"),
+            "normalized/policy_grad_rms": jax.lax.pmean(
+                grad_rms, axis_name="n_gpu"
+            ),
+            "normalized/policy_grad_over_clip": jax.lax.pmean(
+                grad_norm / jnp.maximum(self.max_grad_norm, 1e-12),
+                axis_name="n_gpu",
+            ),
         })
         return actor_state, info
 

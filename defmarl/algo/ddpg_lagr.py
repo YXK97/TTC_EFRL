@@ -11,7 +11,7 @@ from flax.training.train_state import TrainState
 from .ddpg import DDPG, _tree_first_device
 from ..env.base import MultiAgentEnv
 from ..trainer.data import Rollout
-from ..trainer.utils import has_any_nan_or_inf, compute_norm_and_clip
+from ..trainer.utils import has_any_nan_or_inf, compute_norm_and_clip, compute_rms
 from ..utils.typing import Array, Params
 
 
@@ -30,6 +30,8 @@ class DDPGLagr(DDPG):
     lambda 使用 projected gradient 更新：
         lambda <- relu(lambda + lr_lagr * violation)
     """
+
+    SAFETY_CRITIC_LOSS_KEY = "critic/loss_Vh"
 
     def __init__(
             self,
@@ -173,6 +175,7 @@ class DDPGLagr(DDPG):
 
         grad, (safety_q, info) = jax.grad(actor_loss_fn, has_aux=True)(actor_state.params)
         grad_has_nan = jax.lax.pmax(has_any_nan_or_inf(grad).astype(jnp.float32), axis_name="n_gpu")
+        grad_rms = compute_rms(grad)
         grad, grad_norm = compute_norm_and_clip(grad, self.max_grad_norm)
         actor_state = actor_state.apply_gradients(grads=grad)
 
@@ -194,6 +197,13 @@ class DDPGLagr(DDPG):
             "lagr/violation_max": jax.lax.pmean(violation.max(), axis_name="n_gpu"),
             "policy/has_nan": grad_has_nan,
             "policy/grad_norm": jax.lax.pmean(grad_norm, axis_name="n_gpu"),
+            "normalized/policy_grad_rms": jax.lax.pmean(
+                grad_rms, axis_name="n_gpu"
+            ),
+            "normalized/policy_grad_over_clip": jax.lax.pmean(
+                grad_norm / jnp.maximum(self.max_grad_norm, 1e-12),
+                axis_name="n_gpu",
+            ),
         })
         return actor_state, lagr, info
 

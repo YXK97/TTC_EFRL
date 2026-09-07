@@ -16,7 +16,13 @@ from ..utils.typing import Action, Params, PRNGKey, Array
 from ..utils.graph import GraphsTuple
 from ..utils.utils import jax_vmap, tree_index
 from ..trainer.data import Rollout
-from ..trainer.utils import has_any_nan_or_inf, compute_norm_and_clip
+from ..trainer.utils import (
+    compute_norm_and_clip,
+    compute_rms,
+    has_any_nan_or_inf,
+    normalized_l2_loss,
+    target_rms,
+)
 from ..trainer.utils import rollout as rollout_fn
 from ..env.base import MultiAgentEnv
 from ..algo.module.value import ValueNet
@@ -447,17 +453,28 @@ class InforMARL(Algorithm):
             ))(graph_chunks, rnn_state_inits)  # values: (b, n_chunks, T_chunk, a, 1)
             values = values.sum(-2).reshape((values.shape[0], -1))
             loss_critic = optax.l2_loss(values, targets).mean()
-            return loss_critic
+            info = {
+                'normalized/critic_loss': normalized_l2_loss(
+                    loss_critic, targets
+                ),
+                'normalized/critic_target_rms': target_rms(targets),
+            }
+            return loss_critic, info
 
-        loss, grad = jax.value_and_grad(get_value_loss)(critic_train_state.params)
+        (loss, normalized_info), grad = jax.value_and_grad(
+            get_value_loss, has_aux=True
+        )(critic_train_state.params)
         critic_has_nan = has_any_nan_or_inf(grad).astype(jnp.float32)
         grad, grad_norm = compute_norm_and_clip(grad, self.max_grad_norm)
         critic_train_state = critic_train_state.apply_gradients(grads=grad)
-        return critic_train_state, {'critic/loss': loss,
-                                    'critic/grad_norm': grad_norm,
-                                    'critic/has_nan': critic_has_nan,
-                                    'critic/max_target': jnp.max(targets),
-                                    'critic/min_target': jnp.min(targets)}
+        normalized_info.update({
+            'critic/loss': loss,
+            'critic/grad_norm': grad_norm,
+            'critic/has_nan': critic_has_nan,
+            'critic/max_target': jnp.max(targets),
+            'critic/min_target': jnp.min(targets),
+        })
+        return critic_train_state, normalized_info
 
     def scan_eval_action(
             self,
@@ -515,6 +532,7 @@ class InforMARL(Algorithm):
 
         (loss, info), grad = jax.value_and_grad(get_policy_loss, has_aux=True)(policy_train_state.params)
         policy_has_nan = has_any_nan_or_inf(grad).astype(jnp.float32)
+        grad_rms = compute_rms(grad)
 
         # clip grad
         grad, grad_norm = compute_norm_and_clip(grad, self.max_grad_norm)
@@ -526,6 +544,10 @@ class InforMARL(Algorithm):
         info.update({
                    'policy/loss': loss,
                    'policy/grad_norm': grad_norm,
+                   'normalized/policy_grad_rms': grad_rms,
+                   'normalized/policy_grad_over_clip': (
+                       grad_norm / jnp.maximum(self.max_grad_norm, 1e-12)
+                   ),
                    'policy/has_nan': policy_has_nan,
                    'policy/log_pi_min': rollout.log_pis.min()
                     })

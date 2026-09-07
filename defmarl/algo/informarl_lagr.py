@@ -16,7 +16,13 @@ from ..utils.typing import Params, Array
 from ..utils.graph import GraphsTuple
 from ..utils.utils import jax_vmap, tree_index
 from ..trainer.data import Rollout
-from ..trainer.utils import has_any_nan_or_inf, compute_norm_and_clip
+from ..trainer.utils import (
+    compute_norm_and_clip,
+    compute_rms,
+    has_any_nan_or_inf,
+    normalized_l2_loss,
+    target_rms,
+)
 from ..env.base import MultiAgentEnv
 from ..algo.module.value import ValueNet
 from .utils import compute_gae, val_to_optax_schedule
@@ -74,6 +80,7 @@ class InforMARLLagr(InforMARL):
             lagr_init: float = 3.5,
             lr_lagr: float = 1e-7,
             iter_index: int = 0,
+            Vh_gnn_layers: int = 1,
             **kwargs
     ):
         super(InforMARLLagr, self).__init__(
@@ -89,6 +96,7 @@ class InforMARLLagr(InforMARL):
         # set hyperparameters
         self.lagr_init = lagr_init
         self.lr_lagr = lr_lagr
+        self.Vh_gnn_layers = Vh_gnn_layers
 
         self.cost_critic_tx = get_default_tx(self.lr_critic_sched)
 
@@ -100,7 +108,7 @@ class InforMARLLagr(InforMARL):
             n_out=env.n_cost,
             use_rnn=self.use_rnn,
             rnn_layers=self.rnn_layers,
-            gnn_layers=1,
+            gnn_layers=self.Vh_gnn_layers,
             gnn_out_dim=64,
             use_lstm=self.use_lstm,
             use_ef=False,
@@ -134,7 +142,11 @@ class InforMARLLagr(InforMARL):
     @property
     def config(self) -> dict:
         old_config = super().config
-        old_config.update({"lagr_init": self.lagr_init, "lr_lagr": self.lr_lagr})
+        old_config.update({
+            "lagr_init": self.lagr_init,
+            "lr_lagr": self.lr_lagr,
+            "Vh_gnn_layers": self.Vh_gnn_layers,
+        })
 
         return old_config
 
@@ -332,7 +344,17 @@ class InforMARLLagr(InforMARL):
             loss_cost = optax.l2_loss(bcTah_cost_value, bcTah_cost_targets).mean()
             info = {
                 "critic/loss": loss_value,
-                "critic/loss_Vh": loss_cost
+                "critic/loss_Vh": loss_cost,
+                "normalized/critic_loss": normalized_l2_loss(
+                    loss_value, bcT_targets
+                ),
+                "normalized/critic_loss_Vh": normalized_l2_loss(
+                    loss_cost, bcTah_cost_targets
+                ),
+                "normalized/critic_target_rms": target_rms(bcT_targets),
+                "normalized/critic_target_rms_Vh": target_rms(
+                    bcTah_cost_targets
+                ),
             }
             return loss_value + loss_cost, info
 
@@ -399,6 +421,7 @@ class InforMARLLagr(InforMARL):
 
         grad, (bcTa_weight, policy_info) = jax.grad(get_loss, has_aux=True)(policy_train_state.params)
         grad_has_nan = has_any_nan_or_inf(grad).astype(jnp.float32)
+        grad_rms = compute_rms(grad)
         grad, grad_norm = compute_norm_and_clip(grad, self.max_grad_norm)
         policy_train_state = policy_train_state.apply_gradients(grads=grad)
 
@@ -408,6 +431,10 @@ class InforMARLLagr(InforMARL):
         lagr = nn.relu(lagr - delta_lagr * self.lr_lagr)
         policy_info.update({'policy/has_nan': grad_has_nan,
                             'policy/grad_norm': grad_norm,
+                            'normalized/policy_grad_rms': grad_rms,
+                            'normalized/policy_grad_over_clip': (
+                                grad_norm / jnp.maximum(self.max_grad_norm, 1e-12)
+                            ),
                             'policy/mean_lagr': lagr.mean()})
 
         return policy_train_state, lagr, policy_info

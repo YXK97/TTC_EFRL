@@ -20,7 +20,7 @@ from ..utils.graph import GraphsTuple
 from ..utils.utils import jax_vmap, tree_index, tree_where
 from ..trainer.data import Rollout
 from ..trainer.utils import rollout as rollout_fn
-from ..trainer.utils import has_any_nan_or_inf, compute_norm_and_clip
+from ..trainer.utils import has_any_nan_or_inf, compute_norm_and_clip, compute_rms
 from ..env.base import MultiAgentEnv
 from ..algo.module.value import ValueNet
 from ..algo.module.policy import PPOPolicy
@@ -96,6 +96,7 @@ class DefMARL(Algorithm):
         self.cost_weight = cost_weight
         self.actor_gnn_layers = actor_gnn_layers
         self.critic_gnn_layers = critic_gnn_layers
+        self.Vh_gnn_layers = Vh_gnn_layers
         self.gamma = gamma
 
         self.lr_actor_val = lr_actor
@@ -248,7 +249,7 @@ class DefMARL(Algorithm):
             n_out=env.n_cost,
             use_rnn=self.use_rnn,
             rnn_layers=self.rnn_layers,
-            gnn_layers=Vh_gnn_layers,
+            gnn_layers=self.Vh_gnn_layers,
             gnn_out_dim=64,
             use_lstm=self.use_lstm,
             use_ef=True,
@@ -337,6 +338,7 @@ class DefMARL(Algorithm):
             'cost_weight': self.cost_weight,
             'actor_gnn_layers': self.actor_gnn_layers,
             'critic_gnn_layers': self.critic_gnn_layers,
+            'Vh_gnn_layers': self.Vh_gnn_layers,
             'gamma': self.gamma,
             'rollout_length': self.rollout_length,
 
@@ -689,9 +691,17 @@ class DefMARL(Algorithm):
 
         grad, policy_info = jax.grad(get_loss, has_aux=True)(policy_train_state.params)
         grad_has_nan = (jax.lax.psum(has_any_nan_or_inf(grad).astype(jnp.float32), axis_name='n_gpu') > 0).astype(jnp.float32)
+        grad_rms = compute_rms(grad)
         grad, grad_norm = compute_norm_and_clip(grad, self.max_grad_norm)
         policy_train_state = policy_train_state.apply_gradients(grads=grad)
-        policy_info.update({'policy/has_nan': grad_has_nan, 'policy/grad_norm': grad_norm})
+        policy_info.update({
+            'policy/has_nan': grad_has_nan,
+            'policy/grad_norm': grad_norm,
+            'normalized/policy_grad_rms': grad_rms,
+            'normalized/policy_grad_over_clip': (
+                grad_norm / jnp.maximum(self.max_grad_norm, 1e-12)
+            ),
+        })
 
         return policy_train_state, policy_info
 
@@ -723,11 +733,25 @@ class DefMARL(Algorithm):
             # loss_Vh_device = jnp.where(loss_Vh_device < 1e9, loss_Vh_device, 0) # 降低safety计算过程中，由于各种计算方法误差导致的噪声
             loss_Vl = jax.lax.pmean(loss_Vl_device.mean(), axis_name='n_gpu')
             loss_Vh = jax.lax.pmean(loss_Vh_device.mean(), axis_name='n_gpu')
+            target_rms_Vl = jnp.sqrt(jax.lax.pmean(
+                jnp.mean(jnp.square(bcT_Ql)), axis_name='n_gpu'
+            ))
+            target_rms_Vh = jnp.sqrt(jax.lax.pmean(
+                jnp.mean(jnp.square(bcTah_Qh)), axis_name='n_gpu'
+            ))
             gt_unsafe = jax.lax.pmean((bcTah_Qh > 1e-6).mean(), axis_name='n_gpu')
             info = {
                 'critic/loss': loss_Vl,
                 'critic/loss_Vh': loss_Vh,
-                'critic/gt_unsafe': gt_unsafe
+                'critic/gt_unsafe': gt_unsafe,
+                'normalized/critic_loss': (
+                    2.0 * loss_Vl / (jnp.square(target_rms_Vl) + 1e-6)
+                ),
+                'normalized/critic_loss_Vh': (
+                    2.0 * loss_Vh / (jnp.square(target_rms_Vh) + 1e-6)
+                ),
+                'normalized/critic_target_rms': target_rms_Vl,
+                'normalized/critic_target_rms_Vh': target_rms_Vh,
             }
             return loss_Vl + loss_Vh, info
 
