@@ -112,7 +112,7 @@ class MVELaneChangeAndOverTake_LowSpeed_ISSf_CBF_Dynamic(MVELaneChangeAndOverTak
         agent = self._observable(graph.env_states.agent)
         goal = self._observable(graph.env_states.goal)
         e = agent - goal
-        W = jnp.diag(jnp.array([3e-5, 3e-5, 0, 0, 3e-5, 0]))
+        W = jnp.diag(jnp.array([2e-5, 2e-5, 0, 0, 1e-4, 0]))
         reward = -jnp.sqrt(jnp.einsum("ai,ij,ja->a", e, W, e.transpose())).mean()
         # reward -= (action[:, 0] ** 2).mean() * 0.0001
         # reward -= (action[:, 1] ** 2).mean() * 0.0001
