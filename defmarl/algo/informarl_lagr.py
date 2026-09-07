@@ -20,8 +20,6 @@ from ..trainer.utils import (
     compute_norm_and_clip,
     compute_rms,
     has_any_nan_or_inf,
-    normalized_l2_loss,
-    target_rms,
 )
 from ..env.base import MultiAgentEnv
 from ..algo.module.value import ValueNet
@@ -340,36 +338,75 @@ class InforMARLLagr(InforMARL):
                            cost_critic_params=cost_critic_params)
             ))(graph_chunks, cost_rnn_state_inits)
 
-            loss_value = optax.l2_loss(bcT_value, bcT_targets).mean()
-            loss_cost = optax.l2_loss(bcTah_cost_value, bcTah_cost_targets).mean()
+            loss_value = jax.lax.pmean(
+                optax.l2_loss(bcT_value, bcT_targets).mean(),
+                axis_name="n_gpu",
+            )
+            loss_cost = jax.lax.pmean(
+                optax.l2_loss(
+                    bcTah_cost_value, bcTah_cost_targets
+                ).mean(),
+                axis_name="n_gpu",
+            )
+            target_value_mean_square = jax.lax.pmean(
+                jnp.mean(jnp.square(bcT_targets)), axis_name="n_gpu"
+            )
+            target_cost_mean_square = jax.lax.pmean(
+                jnp.mean(jnp.square(bcTah_cost_targets)),
+                axis_name="n_gpu",
+            )
             info = {
                 "critic/loss": loss_value,
                 "critic/loss_Vh": loss_cost,
-                "normalized/critic_loss": normalized_l2_loss(
-                    loss_value, bcT_targets
+                "normalized/critic_loss": (
+                    2.0 * loss_value
+                    / (target_value_mean_square + 1e-6)
                 ),
-                "normalized/critic_loss_Vh": normalized_l2_loss(
-                    loss_cost, bcTah_cost_targets
+                "normalized/critic_loss_Vh": (
+                    2.0 * loss_cost
+                    / (target_cost_mean_square + 1e-6)
                 ),
-                "normalized/critic_target_rms": target_rms(bcT_targets),
-                "normalized/critic_target_rms_Vh": target_rms(
-                    bcTah_cost_targets
+                "normalized/critic_target_rms": jnp.sqrt(
+                    target_value_mean_square
+                ),
+                "normalized/critic_target_rms_Vh": jnp.sqrt(
+                    target_cost_mean_square
                 ),
             }
             return loss_value + loss_cost, info
 
         (grad_value, grad_cost), value_info = jax.grad(get_loss, argnums=(0, 1), has_aux=True)(
             critic_train_state.params, cost_critic_train_state.params)
-        grad_value_has_nan = has_any_nan_or_inf(grad_value).astype(jnp.float32)
-        grad_cost_has_nan = has_any_nan_or_inf(grad_cost).astype(jnp.float32)
+        grad_value_has_nan = jax.lax.pmax(
+            has_any_nan_or_inf(grad_value).astype(jnp.float32),
+            axis_name="n_gpu",
+        )
+        grad_cost_has_nan = jax.lax.pmax(
+            has_any_nan_or_inf(grad_cost).astype(jnp.float32),
+            axis_name="n_gpu",
+        )
+        grad_value = jtu.tree_map(
+            lambda leaf: jax.lax.pmean(leaf, axis_name="n_gpu"),
+            grad_value,
+        )
+        grad_cost = jtu.tree_map(
+            lambda leaf: jax.lax.pmean(leaf, axis_name="n_gpu"),
+            grad_cost,
+        )
         grad_value, grad_value_norm = compute_norm_and_clip(grad_value, self.max_grad_norm)
         grad_cost, grad_cost_norm = compute_norm_and_clip(grad_cost, self.max_grad_norm)
         critic_train_state = critic_train_state.apply_gradients(grads=grad_value)
         cost_critic_train_state = cost_critic_train_state.apply_gradients(grads=grad_cost)
-        value_info.update({'critic/has_nan': grad_value_has_nan,
-                           'critic/grad_Vh_has_nan': grad_cost_has_nan,
-                           'critic/grad_norm': grad_value_norm,
-                           'critic/grad_Vh_norm': grad_cost_norm})
+        value_info.update({
+            'critic/has_nan': grad_value_has_nan,
+            'critic/grad_Vh_has_nan': grad_cost_has_nan,
+            'critic/grad_norm': jax.lax.pmean(
+                grad_value_norm, axis_name="n_gpu"
+            ),
+            'critic/grad_Vh_norm': jax.lax.pmean(
+                grad_cost_norm, axis_name="n_gpu"
+            ),
+        })
 
         return critic_train_state, cost_critic_train_state, value_info
 
@@ -406,11 +443,21 @@ class InforMARLLagr(InforMARL):
             bcTa_ratio = jnp.exp(bcTa_log_pis - bcT_rollout.log_pis)
             loss_policy1 = -bcTa_ratio * bcTa_gaes
             loss_policy2 = -jnp.clip(bcTa_ratio, 1.0 - self.clip_eps, 1.0 + self.clip_eps) * bcTa_gaes
-            clip_frac = jnp.mean(loss_policy2 > loss_policy1)
-            loss_policy = jnp.maximum(loss_policy1, loss_policy2).mean()
-            mean_entropy = bcTa_entropy.mean()
+            clip_frac = jax.lax.pmean(
+                jnp.mean(loss_policy2 > loss_policy1), axis_name="n_gpu"
+            )
+            loss_policy = jax.lax.pmean(
+                jnp.maximum(loss_policy1, loss_policy2).mean(),
+                axis_name="n_gpu",
+            )
+            mean_entropy = jax.lax.pmean(
+                bcTa_entropy.mean(), axis_name="n_gpu"
+            )
             policy_loss = loss_policy - self.coef_ent * mean_entropy
-            total_variation_dist = 0.5 * jnp.mean(jnp.abs(bcTa_ratio - 1.0))
+            total_variation_dist = jax.lax.pmean(
+                0.5 * jnp.mean(jnp.abs(bcTa_ratio - 1.0)),
+                axis_name="n_gpu",
+            )
             info = {
                 'policy/loss': loss_policy,
                 'policy/entropy': mean_entropy,
@@ -420,7 +467,13 @@ class InforMARLLagr(InforMARL):
             return policy_loss, (bcTa_ratio, info)
 
         grad, (bcTa_weight, policy_info) = jax.grad(get_loss, has_aux=True)(policy_train_state.params)
-        grad_has_nan = has_any_nan_or_inf(grad).astype(jnp.float32)
+        grad_has_nan = jax.lax.pmax(
+            has_any_nan_or_inf(grad).astype(jnp.float32),
+            axis_name="n_gpu",
+        )
+        grad = jtu.tree_map(
+            lambda leaf: jax.lax.pmean(leaf, axis_name="n_gpu"), grad
+        )
         grad_rms = compute_rms(grad)
         grad, grad_norm = compute_norm_and_clip(grad, self.max_grad_norm)
         policy_train_state = policy_train_state.apply_gradients(grads=grad)
@@ -428,14 +481,22 @@ class InforMARLLagr(InforMARL):
         # update lagrange multiplier
         delta_lagr = -(bcTah_Vc * (1 - self.gamma) +
                        bcTa_weight[:, :, :, :, None] * bcTah_cost_gaes).mean(axis=(0, 1, 2))
+        delta_lagr = jax.lax.pmean(delta_lagr, axis_name="n_gpu")
         lagr = nn.relu(lagr - delta_lagr * self.lr_lagr)
         policy_info.update({'policy/has_nan': grad_has_nan,
-                            'policy/grad_norm': grad_norm,
-                            'normalized/policy_grad_rms': grad_rms,
-                            'normalized/policy_grad_over_clip': (
-                                grad_norm / jnp.maximum(self.max_grad_norm, 1e-12)
+                            'policy/grad_norm': jax.lax.pmean(
+                                grad_norm, axis_name="n_gpu"
                             ),
-                            'policy/mean_lagr': lagr.mean()})
+                            'normalized/policy_grad_rms': jax.lax.pmean(
+                                grad_rms, axis_name="n_gpu"
+                            ),
+                            'normalized/policy_grad_over_clip': jax.lax.pmean(
+                                grad_norm / jnp.maximum(self.max_grad_norm, 1e-12),
+                                axis_name="n_gpu",
+                            ),
+                            'policy/mean_lagr': jax.lax.pmean(
+                                lagr.mean(), axis_name="n_gpu"
+                            )})
 
         return policy_train_state, lagr, policy_info
 

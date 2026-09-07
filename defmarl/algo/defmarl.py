@@ -691,6 +691,9 @@ class DefMARL(Algorithm):
 
         grad, policy_info = jax.grad(get_loss, has_aux=True)(policy_train_state.params)
         grad_has_nan = (jax.lax.psum(has_any_nan_or_inf(grad).astype(jnp.float32), axis_name='n_gpu') > 0).astype(jnp.float32)
+        grad = jtu.tree_map(
+            lambda leaf: jax.lax.pmean(leaf, axis_name='n_gpu'), grad
+        )
         grad_rms = compute_rms(grad)
         grad, grad_norm = compute_norm_and_clip(grad, self.max_grad_norm)
         policy_train_state = policy_train_state.apply_gradients(grads=grad)
@@ -759,6 +762,12 @@ class DefMARL(Algorithm):
             critic_train_state.params, Vh_train_state.params)
         grad_Vl_has_nan = (jax.lax.psum(has_any_nan_or_inf(grad_Vl).astype(jnp.float32), axis_name='n_gpu') > 0).astype(jnp.float32)
         grad_Vh_has_nan = (jax.lax.psum(has_any_nan_or_inf(grad_Vh).astype(jnp.float32), axis_name='n_gpu') > 0).astype(jnp.float32)
+        grad_Vl = jtu.tree_map(
+            lambda leaf: jax.lax.pmean(leaf, axis_name='n_gpu'), grad_Vl
+        )
+        grad_Vh = jtu.tree_map(
+            lambda leaf: jax.lax.pmean(leaf, axis_name='n_gpu'), grad_Vh
+        )
         grad_Vl, grad_Vl_norm = compute_norm_and_clip(grad_Vl, self.max_grad_norm)
         grad_Vh, grad_Vh_norm = compute_norm_and_clip(grad_Vh, self.max_grad_norm)
         critic_train_state = critic_train_state.apply_gradients(grads=grad_Vl)

@@ -505,13 +505,20 @@ class DDPG(Algorithm):
                     target_safety_mean_square
                 ),
             }
-            return loss_q + loss_safety, info
+            return loss_q_mean + loss_safety_mean, info
 
         (grad_q, grad_safety), info = jax.grad(critic_loss_fn, argnums=(0, 1), has_aux=True)(
             critic_state.params, safety_state.params
         )
         grad_q_has_nan = jax.lax.pmax(has_any_nan_or_inf(grad_q).astype(jnp.float32), axis_name="n_gpu")
         grad_safety_has_nan = jax.lax.pmax(has_any_nan_or_inf(grad_safety).astype(jnp.float32), axis_name="n_gpu")
+        grad_q = jtu.tree_map(
+            lambda leaf: jax.lax.pmean(leaf, axis_name="n_gpu"), grad_q
+        )
+        grad_safety = jtu.tree_map(
+            lambda leaf: jax.lax.pmean(leaf, axis_name="n_gpu"),
+            grad_safety,
+        )
         grad_q, grad_q_norm = compute_norm_and_clip(grad_q, self.max_grad_norm)
         grad_safety, grad_safety_norm = compute_norm_and_clip(grad_safety, self.max_grad_norm)
         critic_state = critic_state.apply_gradients(grads=grad_q)
@@ -549,10 +556,15 @@ class DDPG(Algorithm):
                 "policy/safety_q": jax.lax.pmean(safety_q.mean(), axis_name="n_gpu"),
                 "policy/action_abs": jax.lax.pmean(jnp.abs(actions).mean(), axis_name="n_gpu"),
             }
-            return loss, (safety_q, info)
+            return jax.lax.pmean(
+                loss, axis_name="n_gpu"
+            ), (safety_q, info)
 
         grad, (safety_q, info) = jax.grad(actor_loss_fn, has_aux=True)(actor_state.params)
         grad_has_nan = jax.lax.pmax(has_any_nan_or_inf(grad).astype(jnp.float32), axis_name="n_gpu")
+        grad = jtu.tree_map(
+            lambda leaf: jax.lax.pmean(leaf, axis_name="n_gpu"), grad
+        )
         grad_rms = compute_rms(grad)
         grad, grad_norm = compute_norm_and_clip(grad, self.max_grad_norm)
         actor_state = actor_state.apply_gradients(grads=grad)

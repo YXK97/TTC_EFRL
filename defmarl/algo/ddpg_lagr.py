@@ -171,10 +171,15 @@ class DDPGLagr(DDPG):
                 "policy/safety_q": jax.lax.pmean(safety_q.mean(), axis_name="n_gpu"),
                 "policy/action_abs": jax.lax.pmean(jnp.abs(actions).mean(), axis_name="n_gpu"),
             }
-            return loss, (safety_q, info)
+            return jax.lax.pmean(
+                loss, axis_name="n_gpu"
+            ), (safety_q, info)
 
         grad, (safety_q, info) = jax.grad(actor_loss_fn, has_aux=True)(actor_state.params)
         grad_has_nan = jax.lax.pmax(has_any_nan_or_inf(grad).astype(jnp.float32), axis_name="n_gpu")
+        grad = jtu.tree_map(
+            lambda leaf: jax.lax.pmean(leaf, axis_name="n_gpu"), grad
+        )
         grad_rms = compute_rms(grad)
         grad, grad_norm = compute_norm_and_clip(grad, self.max_grad_norm)
         actor_state = actor_state.apply_gradients(grads=grad)
